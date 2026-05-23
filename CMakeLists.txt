@@ -6,8 +6,8 @@ if(NOT WIN32)
     message(FATAL_ERROR "sunone_aimbot_2 currently supports Windows builds only.")
 endif()
 
-if(NOT CMAKE_GENERATOR STREQUAL "Visual Studio 18 2026")
-    message(FATAL_ERROR "Only 'Visual Studio 18 2026' generator is supported. Current generator: ${CMAKE_GENERATOR}")
+if(NOT CMAKE_GENERATOR MATCHES "^Ninja")
+    message(FATAL_ERROR "Only Ninja generators are supported by the automated build. Current generator: ${CMAKE_GENERATOR}")
 endif()
 
 set(CMAKE_C_STANDARD 11)
@@ -21,36 +21,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(AIMBOT_USE_CUDA "Enable CUDA + TensorRT backend (USE_CUDA)" OFF)
 option(AIMBOT_COPY_RUNTIME_DLLS "Copy required runtime DLLs next to ai.exe after build" ON)
 
-set(AIMBOT_OPENCV_DML_PREBUILT_ROOT
-    "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/opencv/prebuilt/opencv/build"
-    CACHE PATH "Path to prebuilt OpenCV build directory used by DML defaults")
-
-set(_opencv_cuda_install_root "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/opencv/build/install")
-if(NOT AIMBOT_USE_CUDA)
-    set(_opencv_include_default "${AIMBOT_OPENCV_DML_PREBUILT_ROOT}/include")
-    set(_opencv_vc_glob "${AIMBOT_OPENCV_DML_PREBUILT_ROOT}/x64/vc*")
-else()
-    set(_opencv_include_default "${_opencv_cuda_install_root}/include")
-    set(_opencv_vc_glob "${_opencv_cuda_install_root}/x64/vc*")
-endif()
-
-file(GLOB _opencv_vc_dirs LIST_DIRECTORIES true "${_opencv_vc_glob}")
-if(_opencv_vc_dirs)
-    list(SORT _opencv_vc_dirs COMPARE NATURAL ORDER DESCENDING)
-    list(GET _opencv_vc_dirs 0 _opencv_vc_dir)
-else()
-    if(NOT AIMBOT_USE_CUDA)
-        set(_opencv_vc_dir "${AIMBOT_OPENCV_DML_PREBUILT_ROOT}/x64/vc17")
-    else()
-        set(_opencv_vc_dir "${_opencv_cuda_install_root}/x64/vc18")
-    endif()
-endif()
-
 set(AIMBOT_PACKAGES_DIR "${CMAKE_SOURCE_DIR}/packages" CACHE PATH "Directory with restored NuGet packages")
-set(AIMBOT_OPENCV_INCLUDE_DIR "${_opencv_include_default}" CACHE PATH "Path to OpenCV include directory")
-set(AIMBOT_OPENCV_LIBRARY "${_opencv_vc_dir}/lib/opencv_world4130.lib" CACHE FILEPATH "Path to opencv_world4130.lib")
-set(AIMBOT_OPENCV_DLL "${_opencv_vc_dir}/bin/opencv_world4130.dll" CACHE FILEPATH "Path to opencv_world4130.dll")
-set(AIMBOT_TENSORRT_ROOT "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/TensorRT-10.14.1.48" CACHE PATH "Path to TensorRT root directory")
+set(AIMBOT_OPENCV_DML_ROOT
+    "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/opencv/build/dml"
+    CACHE PATH "Path to DML OpenCV build root")
+set(AIMBOT_OPENCV_CUDA_ROOT
+    "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/opencv/build/cuda/install"
+    CACHE PATH "Path to CUDA OpenCV install root")
+set(AIMBOT_OPENCV_INCLUDE_DIR "" CACHE PATH "Path to OpenCV include directory")
+set(AIMBOT_OPENCV_LIBRARY "" CACHE FILEPATH "Path to opencv_world*.lib")
+set(AIMBOT_OPENCV_DLL "" CACHE FILEPATH "Path to opencv_world*.dll")
+set(AIMBOT_TENSORRT_ROOT "" CACHE PATH "Path to TensorRT root directory")
 set(AIMBOT_GHUB_MOUSE_DLL "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/ghub_mouse.dll" CACHE FILEPATH "Path to ghub_mouse.dll")
 set(AIMBOT_CUDNN_ROOT "$ENV{ProgramW6432}/NVIDIA/CUDNN/v9.17" CACHE PATH "Path to cuDNN root directory (optional)")
 set(AIMBOT_CPPWINRT_INCLUDE_DIR "" CACHE PATH "Path to Windows SDK cppwinrt include directory")
@@ -72,6 +53,62 @@ function(aimbot_pick_latest_dir out_var glob_pattern)
     set(${out_var} "${_latest}" PARENT_SCOPE)
 endfunction()
 
+function(aimbot_find_opencv out_include out_library out_dll)
+    set(_found_include "")
+    set(_found_library "")
+    set(_found_dll "")
+
+    foreach(_root IN LISTS ARGN)
+        if(_found_library)
+            break()
+        endif()
+        if(NOT EXISTS "${_root}/include/opencv2/opencv.hpp")
+            continue()
+        endif()
+
+        file(GLOB _vc_dirs LIST_DIRECTORIES true "${_root}/x64/vc*")
+        if(NOT _vc_dirs)
+            continue()
+        endif()
+        list(SORT _vc_dirs COMPARE NATURAL ORDER DESCENDING)
+
+        foreach(_vc_dir IN LISTS _vc_dirs)
+            file(GLOB _opencv_world_libs "${_vc_dir}/lib/opencv_world*.lib")
+            if(NOT _opencv_world_libs)
+                continue()
+            endif()
+            list(SORT _opencv_world_libs COMPARE NATURAL ORDER DESCENDING)
+            foreach(_lib IN LISTS _opencv_world_libs)
+                get_filename_component(_stem "${_lib}" NAME_WE)
+                if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_CONFIGURATION_TYPES)
+                    if(_stem MATCHES "d$")
+                        continue()
+                    endif()
+                endif()
+                if(CMAKE_CONFIGURATION_TYPES)
+                    if(_stem MATCHES "d$")
+                        continue()
+                    endif()
+                endif()
+                set(_dll "${_vc_dir}/bin/${_stem}.dll")
+                if(EXISTS "${_dll}")
+                    set(_found_include "${_root}/include")
+                    set(_found_library "${_lib}")
+                    set(_found_dll "${_dll}")
+                    break()
+                endif()
+            endforeach()
+            if(_found_library)
+                break()
+            endif()
+        endforeach()
+    endforeach()
+
+    set(${out_include} "${_found_include}" PARENT_SCOPE)
+    set(${out_library} "${_found_library}" PARENT_SCOPE)
+    set(${out_dll} "${_found_dll}" PARENT_SCOPE)
+endfunction()
+
 function(aimbot_require_file path description)
     if(NOT EXISTS "${path}")
         message(FATAL_ERROR "${description} not found: ${path}")
@@ -91,9 +128,39 @@ endfunction()
 
 aimbot_pick_latest_dir(_onnxruntime_default "${AIMBOT_PACKAGES_DIR}/Microsoft.ML.OnnxRuntime.DirectML.*")
 aimbot_pick_latest_dir(_directml_default "${AIMBOT_PACKAGES_DIR}/Microsoft.AI.DirectML.*")
+aimbot_pick_latest_dir(_tensorrt_default "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/TensorRT-*")
 
 set(AIMBOT_ONNXRUNTIME_DIR "${_onnxruntime_default}" CACHE PATH "Path to Microsoft.ML.OnnxRuntime.DirectML.* package")
 set(AIMBOT_DIRECTML_DIR "${_directml_default}" CACHE PATH "Path to Microsoft.AI.DirectML.* package")
+if(AIMBOT_TENSORRT_ROOT STREQUAL "" OR
+   NOT EXISTS "${AIMBOT_TENSORRT_ROOT}/include/NvInfer.h" OR
+   NOT EXISTS "${AIMBOT_TENSORRT_ROOT}/lib/nvinfer_10.lib")
+    set(AIMBOT_TENSORRT_ROOT "${_tensorrt_default}" CACHE PATH "Path to TensorRT root directory" FORCE)
+endif()
+
+if(AIMBOT_USE_CUDA)
+    set(_opencv_candidate_roots
+        "${AIMBOT_OPENCV_CUDA_ROOT}"
+        "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/opencv/build/install")
+else()
+    set(_opencv_candidate_roots
+        "${AIMBOT_OPENCV_DML_ROOT}"
+        "${CMAKE_SOURCE_DIR}/sunone_aimbot_2/modules/opencv/prebuilt/opencv/build")
+endif()
+
+if(AIMBOT_OPENCV_INCLUDE_DIR STREQUAL "" OR
+   AIMBOT_OPENCV_LIBRARY STREQUAL "" OR
+   AIMBOT_OPENCV_DLL STREQUAL "" OR
+   NOT EXISTS "${AIMBOT_OPENCV_INCLUDE_DIR}/opencv2/opencv.hpp" OR
+   NOT EXISTS "${AIMBOT_OPENCV_LIBRARY}" OR
+   NOT EXISTS "${AIMBOT_OPENCV_DLL}")
+    aimbot_find_opencv(_opencv_include_detected _opencv_library_detected _opencv_dll_detected ${_opencv_candidate_roots})
+    if(NOT _opencv_library_detected STREQUAL "")
+        set(AIMBOT_OPENCV_INCLUDE_DIR "${_opencv_include_detected}" CACHE PATH "Path to OpenCV include directory" FORCE)
+        set(AIMBOT_OPENCV_LIBRARY "${_opencv_library_detected}" CACHE FILEPATH "Path to opencv_world*.lib" FORCE)
+        set(AIMBOT_OPENCV_DLL "${_opencv_dll_detected}" CACHE FILEPATH "Path to opencv_world*.dll" FORCE)
+    endif()
+endif()
 
 if(AIMBOT_CPPWINRT_INCLUDE_DIR STREQUAL "")
     if(DEFINED CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION AND DEFINED ENV{WindowsSdkDir})
@@ -197,7 +264,6 @@ if(AIMBOT_USE_CUDA)
         "${SRC_DIR}/detector/trt_detector.cpp"
         "${SRC_DIR}/mem/gpu_resource_manager.cpp"
         "${SRC_DIR}/tensorrt/nvinf.cpp"
-        "${SRC_DIR}/detector/cuda_preprocess.cu"
     )
 endif()
 
@@ -260,6 +326,8 @@ target_compile_definitions(ai PRIVATE
     UNICODE
     _UNICODE
     _CONSOLE
+    # C++/WinRT still includes the experimental coroutine header in C++17 mode.
+    _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
 )
 
 if(MSVC)
