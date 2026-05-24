@@ -206,10 +206,11 @@ void MultiTargetTracker::update(
     int screenWidth,
     int screenHeight,
     bool disableHeadshot,
-    bool keepCurrentLock)
+    bool keepCurrentLock,
+    std::chrono::steady_clock::time_point observationTime)
 {
     static const std::vector<float> emptyConfidences;
-    update(boxes, classes, emptyConfidences, screenWidth, screenHeight, disableHeadshot, keepCurrentLock);
+    update(boxes, classes, emptyConfidences, screenWidth, screenHeight, disableHeadshot, keepCurrentLock, observationTime);
 }
 
 void MultiTargetTracker::update(
@@ -219,9 +220,12 @@ void MultiTargetTracker::update(
     int screenWidth,
     int screenHeight,
     bool disableHeadshot,
-    bool keepCurrentLock)
+    bool keepCurrentLock,
+    std::chrono::steady_clock::time_point observationTime)
 {
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = (observationTime.time_since_epoch().count() != 0)
+        ? observationTime
+        : std::chrono::steady_clock::now();
 
     for (auto& t : tracks_)
         t.observedThisFrame = false;
@@ -820,6 +824,9 @@ std::vector<TrackDebugInfo> MultiTargetTracker::getDebugTracks() const
         );
         d.pivotX = t.pivotX;
         d.pivotY = t.pivotY;
+        d.velocityX = t.velocity.x;
+        d.velocityY = t.velocity.y;
+        d.lastUpdate = t.lastUpdate;
         d.confidence = t.confidence;
         d.hits = t.hits;
         d.observedThisFrame = t.observedThisFrame;

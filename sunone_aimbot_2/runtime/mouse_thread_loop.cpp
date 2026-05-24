@@ -21,59 +21,8 @@ void handleEasyNoRecoil(MouseThread& mouseThread)
 {
     if (config.easynorecoil && shooting.load() && zooming.load())
     {
-        std::lock_guard<std::mutex> lock(mouseThread.input_method_mutex);
         int recoil_compensation = static_cast<int>(config.easynorecoilstrength);
-        const std::string inputMethod = config.input_method;
-
-        if (inputMethod == "TEENSY41_HID")
-        {
-            if (teensy41RawHid)
-                teensy41RawHid->move(0, recoil_compensation);
-        }
-        else if (inputMethod == "RAZER")
-        {
-            if (rzctlMouse)
-                rzctlMouse->mouse_xy(0, recoil_compensation);
-        }
-        else if (inputMethod == "ARDUINO")
-        {
-            if (arduinoSerial)
-                arduinoSerial->move(0, recoil_compensation);
-        }
-        else if (inputMethod == "RP2350")
-        {
-            if (rp2350Serial)
-                rp2350Serial->move(0, recoil_compensation);
-        }
-        else if (inputMethod == "GHUB")
-        {
-            if (gHub)
-                gHub->mouse_xy(0, recoil_compensation);
-        }
-        else if (inputMethod == "KMBOX_NET")
-        {
-            if (kmboxNetSerial)
-                kmboxNetSerial->move(0, recoil_compensation);
-        }
-        else if (inputMethod == "KMBOX_A")
-        {
-            if (kmboxASerial)
-                kmboxASerial->move(0, recoil_compensation);
-        }
-        else if (inputMethod == "MAKCU")
-        {
-            if (makcuSerial)
-                makcuSerial->move(0, recoil_compensation);
-        }
-        else if (inputMethod == "WIN32")
-        {
-            INPUT input = { 0 };
-            input.type = INPUT_MOUSE;
-            input.mi.dx = 0;
-            input.mi.dy = recoil_compensation;
-            input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK;
-            SendInput(1, &input, sizeof(INPUT));
-        }
+        mouseThread.moveRelative(0, recoil_compensation);
     }
 }
 
@@ -83,6 +32,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
     std::vector<cv::Rect> boxes;
     std::vector<int> classes;
     std::vector<float> confidences;
+    std::chrono::steady_clock::time_point detectionTimestamp{};
     MultiTargetTracker targetTracker;
     std::optional<AimbotTarget> activeTarget;
     auto lastTrackerUpdate = std::chrono::steady_clock::time_point::min();
@@ -106,6 +56,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
                 boxes = detectionBuffer.boxes;
                 classes = detectionBuffer.classes;
                 confidences = detectionBuffer.confidences;
+                detectionTimestamp = detectionBuffer.frameTimestamp;
                 lastVersion = detectionBuffer.version;
                 hasNewDetection = true;
             }
@@ -151,7 +102,8 @@ void mouseThreadFunction(MouseThread& mouseThread)
                 config.detection_resolution,
                 config.detection_resolution,
                 config.disable_headshot,
-                aiming.load()
+                aiming.load(),
+                detectionTimestamp
             );
             lastTrackerUpdate = std::chrono::steady_clock::now();
             {
@@ -201,7 +153,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
         {
             if (activeTarget && hasAimObservation)
             {
-                mouseThread.moveMousePivot(activeTarget->pivotX, activeTarget->pivotY);
+                mouseThread.moveMousePivot(activeTarget->pivotX, activeTarget->pivotY, detectionTimestamp);
 
                 if (config.auto_shoot)
                 {

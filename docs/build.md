@@ -280,6 +280,7 @@ This checks important source contracts such as:
 - no-options builder behavior.
 - training asset packaging.
 - Circle FOV and legacy mask behavior.
+- frame-age latency compensation while preserving detection confidences.
 - config and UI integration contracts.
 
 ## Troubleshooting

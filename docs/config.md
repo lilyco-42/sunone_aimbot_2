@@ -318,6 +318,7 @@ Use `None` to disable a button where supported.
 | `game_overlay_enabled` | `false` | Enables in-game overlay rendering. |
 | `game_overlay_max_fps` | `0` | Overlay FPS cap. `0` means uncapped/default behavior. |
 | `game_overlay_draw_boxes` | `true` | Draw detection boxes. |
+| `game_overlay_compensate_latency` | `true` | Shifts overlay boxes/icons using frame age and mouse movement recorded after capture. |
 | `game_overlay_draw_future` | `true` | Draw predicted future positions. |
 | `game_overlay_draw_wind_tail` | `true` | Draw wind mouse trail. |
 | `game_overlay_draw_frame` | `true` | Draw frame border. |

@@ -1176,6 +1176,7 @@ void gameOverlayRenderLoop()
 
         std::vector<cv::Rect> boxesCopy;
         std::vector<int> classesCopy;
+        std::chrono::steady_clock::time_point detectionTimestamp{};
         int detectionVersion = lastDetectionVersion;
         {
             std::unique_lock<std::mutex> lk(detectionBuffer.mutex);
@@ -1183,9 +1184,10 @@ void gameOverlayRenderLoop()
             const int waitMs = (fpsCap > 0) ? static_cast<int>(std::max(1u, 1000u / fpsCap)) : 8;
             detectionBuffer.cv.wait_for(lk, std::chrono::milliseconds(waitMs), [&] {
                 return detectionBuffer.version != lastDetectionVersion || gameOverlayShouldExit.load();
-                });
+            });
             boxesCopy = detectionBuffer.boxes;
             classesCopy = detectionBuffer.classes;
+            detectionTimestamp = detectionBuffer.frameTimestamp;
             detectionVersion = detectionBuffer.version;
         }
         lastDetectionVersion = detectionVersion;
@@ -1205,6 +1207,64 @@ void gameOverlayRenderLoop()
             trackDebugCopy = g_trackerDebugTracks;
             lockedTrackId = g_trackerLockedId;
         }
+
+        const auto overlayNow = std::chrono::steady_clock::now();
+        auto projectDetectionBox = [&](
+            const cv::Rect& b,
+            double velocityX = 0.0,
+            double velocityY = 0.0,
+            std::chrono::steady_clock::time_point lastUpdate = {}) -> std::optional<OverlayRect>
+        {
+            if (b.width <= 0 || b.height <= 0)
+                return std::nullopt;
+
+            const auto compensationTimestamp =
+                (lastUpdate.time_since_epoch().count() != 0) ? lastUpdate : detectionTimestamp;
+
+            double ageSec = 0.0;
+            if (compensationTimestamp.time_since_epoch().count() != 0)
+            {
+                ageSec = std::chrono::duration<double>(overlayNow - compensationTimestamp).count();
+                if (!std::isfinite(ageSec) || ageSec < 0.0)
+                    ageSec = 0.0;
+                ageSec = std::clamp(ageSec, 0.0, 0.35);
+            }
+
+            std::pair<double, double> cameraCompensation{ 0.0, 0.0 };
+            if (config.game_overlay_compensate_latency && globalMouseThread &&
+                compensationTimestamp.time_since_epoch().count() != 0)
+            {
+                cameraCompensation = globalMouseThread->getMotionCompensationSince(compensationTimestamp);
+            }
+
+            double left = static_cast<double>(b.x) + velocityX * ageSec - cameraCompensation.first;
+            double top = static_cast<double>(b.y) + velocityY * ageSec - cameraCompensation.second;
+            double right = left + static_cast<double>(b.width);
+            double bottom = top + static_cast<double>(b.height);
+
+            left = std::clamp(left, 0.0, static_cast<double>(detRes));
+            top = std::clamp(top, 0.0, static_cast<double>(detRes));
+            right = std::clamp(right, 0.0, static_cast<double>(detRes));
+            bottom = std::clamp(bottom, 0.0, static_cast<double>(detRes));
+
+            const double w = right - left;
+            const double h = bottom - top;
+            if (w <= 0.0 || h <= 0.0)
+                return std::nullopt;
+
+            OverlayRect rect{
+                static_cast<float>(baseX + left * scaleX),
+                static_cast<float>(baseY + top * scaleY),
+                static_cast<float>(w * scaleX),
+                static_cast<float>(h * scaleY)
+            };
+
+            if (rect.x + rect.w < baseX || rect.y + rect.h < baseY ||
+                rect.x > baseX + regionW || rect.y > baseY + regionH)
+                return std::nullopt;
+
+            return rect;
+        };
 
         if (config.game_overlay_icon_enabled)
         {
@@ -1643,41 +1703,39 @@ void gameOverlayRenderLoop()
             float thickness = config.game_overlay_box_thickness;
             if (thickness <= 0.f) thickness = 1.f;
 
-            for (const auto& b : boxesCopy)
+            const bool drawCompensatedTracks =
+                config.game_overlay_compensate_latency && !trackDebugCopy.empty();
+
+            if (drawCompensatedTracks)
             {
-                if (b.width <= 0 || b.height <= 0) continue;
-
-                int bx = std::max(0, std::min(b.x, detRes));
-                int by = std::max(0, std::min(b.y, detRes));
-                int bw = std::max(0, std::min(b.width, detRes - bx));
-                int bh = std::max(0, std::min(b.height, detRes - by));
-                if (bw == 0 || bh == 0) continue;
-
-                float x = baseX + bx * scaleX;
-                float y = baseY + by * scaleY;
-                float w = bw * scaleX;
-                float h = bh * scaleY;
-
-                if (x + w < baseX || y + h < baseY ||
-                    x > baseX + regionW || y > baseY + regionH)
-                    continue;
-
-                gameOverlayPtr->AddRect({ x, y, w, h }, col, thickness);
+                for (const auto& t : trackDebugCopy)
+                {
+                    auto rect = projectDetectionBox(t.box, t.velocityX, t.velocityY, t.lastUpdate);
+                    if (!rect)
+                        continue;
+                    gameOverlayPtr->AddRect(*rect, col, thickness);
+                }
+            }
+            else
+            {
+                for (const auto& b : boxesCopy)
+                {
+                    auto rect = projectDetectionBox(b);
+                    if (!rect)
+                        continue;
+                    gameOverlayPtr->AddRect(*rect, col, thickness);
+                }
             }
 
             for (const auto& t : trackDebugCopy)
             {
-                const auto& b = t.box;
-                if (b.width <= 0 || b.height <= 0) continue;
-
-                int bx = std::max(0, std::min(b.x, detRes));
-                int by = std::max(0, std::min(b.y, detRes));
-                int bw = std::max(0, std::min(b.width, detRes - bx));
-                int bh = std::max(0, std::min(b.height, detRes - by));
-                if (bw == 0 || bh == 0) continue;
-
-                const float x = baseX + bx * scaleX;
-                const float y = baseY + by * scaleY;
+                auto rect = projectDetectionBox(
+                    t.box,
+                    config.game_overlay_compensate_latency ? t.velocityX : 0.0,
+                    config.game_overlay_compensate_latency ? t.velocityY : 0.0,
+                    t.lastUpdate);
+                if (!rect)
+                    continue;
 
                 std::wstring label = L"ID " + std::to_wstring(t.trackId);
                 if (t.trackId == lockedTrackId || t.isLocked)
@@ -1700,8 +1758,8 @@ void gameOverlayRenderLoop()
                     : ARGB(230, 180, 255, 180);
 
                 gameOverlayPtr->AddText(
-                    x + 2.0f,
-                    std::max(static_cast<float>(baseY), y - 16.0f),
+                    rect->x + 2.0f,
+                    std::max(static_cast<float>(baseY), rect->y - 16.0f),
                     label,
                     15.0f,
                     textCol
@@ -1799,40 +1857,32 @@ void gameOverlayRenderLoop()
                     continue;
                 }
 
-                if (b.width <= 0 || b.height <= 0) continue;
-                int bx = std::max(0, std::min(b.x, detRes));
-                int by = std::max(0, std::min(b.y, detRes));
-                int bw = std::max(0, std::min(b.width, detRes - bx));
-                int bh = std::max(0, std::min(b.height, detRes - by));
-                if (bw == 0 || bh == 0) continue;
+                auto boxRect = projectDetectionBox(b);
+                if (!boxRect)
+                    continue;
 
-                float boxX = baseX + bx * scaleX;
-                float boxY = baseY + by * scaleY;
-                float boxW = bw * scaleX;
-                float boxH = bh * scaleY;
-
-                float drawX = boxX;
-                float drawY = boxY;
+                float drawX = boxRect->x;
+                float drawY = boxRect->y;
 
                 if (anchor == "center")
                 {
-                    drawX = boxX + boxW / 2.0f - iconW / 2.0f;
-                    drawY = boxY + boxH / 2.0f - iconH / 2.0f;
+                    drawX = boxRect->x + boxRect->w / 2.0f - iconW / 2.0f;
+                    drawY = boxRect->y + boxRect->h / 2.0f - iconH / 2.0f;
                 }
                 else if (anchor == "top" || anchor == "head")
                 {
-                    drawX = boxX + boxW / 2.0f - iconW / 2.0f;
-                    drawY = boxY - iconH;
+                    drawX = boxRect->x + boxRect->w / 2.0f - iconW / 2.0f;
+                    drawY = boxRect->y - iconH;
                 }
                 else if (anchor == "bottom")
                 {
-                    drawX = boxX + boxW / 2.0f - iconW / 2.0f;
-                    drawY = boxY + boxH;
+                    drawX = boxRect->x + boxRect->w / 2.0f - iconW / 2.0f;
+                    drawY = boxRect->y + boxRect->h;
                 }
                 else
                 {
-                    drawX = boxX + boxW / 2.0f - iconW / 2.0f;
-                    drawY = boxY + boxH / 2.0f - iconH / 2.0f;
+                    drawX = boxRect->x + boxRect->w / 2.0f - iconW / 2.0f;
+                    drawY = boxRect->y + boxRect->h / 2.0f - iconH / 2.0f;
                 }
 
                 drawX += offXIcon;

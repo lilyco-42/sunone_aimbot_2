@@ -25,8 +25,13 @@ public:
     TrtDetector();
     ~TrtDetector();
     void initialize(const std::string& modelFile);
-    void processFrame(const cv::Mat& detection_frame, const cv::Mat& source_frame = cv::Mat());
-    void processFrameGpu(const cv::cuda::GpuMat& frame);
+    void processFrame(
+        const cv::Mat& detection_frame,
+        const cv::Mat& source_frame = cv::Mat(),
+        std::chrono::steady_clock::time_point frameTimestamp = {});
+    void processFrameGpu(
+        const cv::cuda::GpuMat& frame,
+        std::chrono::steady_clock::time_point frameTimestamp = {});
     void inferenceThread();
     void requestStop();
 
@@ -67,6 +72,7 @@ private:
     cv::Mat currentFrame;
     cv::Mat currentSourceFrame;
     cv::cuda::GpuMat currentFrameGpu;
+    std::chrono::steady_clock::time_point currentFrameTimestamp{};
     bool frameReady;
 
     enum class PendingFrameType

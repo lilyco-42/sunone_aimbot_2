@@ -55,6 +55,9 @@ struct TrackDebugInfo
     cv::Rect box;
     double pivotX = 0.0;
     double pivotY = 0.0;
+    double velocityX = 0.0;
+    double velocityY = 0.0;
+    std::chrono::steady_clock::time_point lastUpdate{};
     bool observedThisFrame = false;
     int missedFrames = 0;
     bool isLocked = false;
@@ -80,7 +83,8 @@ public:
         int screenWidth,
         int screenHeight,
         bool disableHeadshot,
-        bool keepCurrentLock
+        bool keepCurrentLock,
+        std::chrono::steady_clock::time_point observationTime = {}
     );
     void update(
         const std::vector<cv::Rect>& boxes,
@@ -88,7 +92,8 @@ public:
         int screenWidth,
         int screenHeight,
         bool disableHeadshot,
-        bool keepCurrentLock
+        bool keepCurrentLock,
+        std::chrono::steady_clock::time_point observationTime = {}
     );
     bool getLockedTarget(LockedTargetInfo& out) const;
     int getLockedTrackId() const { return lockedTrackId_; }

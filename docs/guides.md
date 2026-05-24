@@ -221,10 +221,27 @@ Useful overlay keys:
 ```ini
 overlay_exclude_from_capture = true
 game_overlay_enabled = false
+game_overlay_compensate_latency = true
 game_overlay_draw_circle_fov = true
 ```
 
 If you are measuring performance, test with the preview closed and then open so you can see how CPU-copy needs change.
+
+### Frame-Age Latency Compensation
+
+The current source is ahead of the upstream SunOner commit that introduced basic frame-age compensation. This project keeps the newer confidence-aware detection buffer, neural tracker fields, explicit Razer/Teensy controls, and no-fallback input routing.
+
+When a frame is captured, the capture thread records a `steady_clock` timestamp before CPU preprocessing or TensorRT submission. DML and TensorRT carry that timestamp into `DetectionBuffer` along with boxes, classes, and confidences. The mouse thread uses the timestamp as the observation time for target tracking and prediction, then subtracts mouse movement that happened after the frame was captured.
+
+The game overlay uses the same timestamp to project boxes/icons forward by track velocity and backward by recorded camera movement. This helps boxes stay aligned with what the user currently sees instead of where the target was when the old frame was captured.
+
+Use this key to disable only the visual overlay correction while leaving aim-side timestamp handling active:
+
+```ini
+game_overlay_compensate_latency = false
+```
+
+The movement trail is populated only after the selected input backend reports or accepts a movement. It does not introduce a fallback control path.
 
 ## Training Assets and Base Models
 

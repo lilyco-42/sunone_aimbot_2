@@ -4,6 +4,7 @@
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 #include <mutex>
+#include <chrono>
 
 #include "postProcess.h"
 
@@ -17,7 +18,10 @@ public:
     std::vector<std::vector<Detection>> detectBatch(const std::vector<cv::Mat>& frames);
 
     void dmlInferenceThread();
-    void processFrame(const cv::Mat& detection_frame, const cv::Mat& source_frame = cv::Mat());
+    void processFrame(
+        const cv::Mat& detection_frame,
+        const cv::Mat& source_frame = cv::Mat(),
+        std::chrono::steady_clock::time_point frameTimestamp = {});
 
     int getNumberOfClasses();
 
@@ -43,6 +47,7 @@ private:
     std::mutex inferenceMutex;
     cv::Mat currentFrame;
     cv::Mat currentSourceFrame;
+    std::chrono::steady_clock::time_point currentFrameTimestamp{};
     bool frameReady = false;
 
     void initializeModel(const std::string& model_path);

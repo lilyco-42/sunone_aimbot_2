@@ -497,11 +497,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
         auto clearDetections = [&]()
         {
-            std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
-            detectionBuffer.boxes.clear();
-            detectionBuffer.classes.clear();
-            detectionBuffer.version++;
-            detectionBuffer.cv.notify_all();
+            detectionBuffer.clear();
         };
 
         auto markCaptureUnavailable = [&]()
@@ -679,6 +675,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             cv::Mat screenshotCpu;
             cv::Mat detectionFrame;
+            std::chrono::steady_clock::time_point frameTimestamp{};
             bool frameSubmittedToDetector = false;
 
 #ifdef USE_CUDA
@@ -722,7 +719,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     if (duplicationCapture->GetNextFrameGpu(screenshotGpu, &gpuStatus))
                     {
                         CountGpuCaptureStatus(cudaDiag, gpuStatus);
-                        trt_detector.processFrameGpu(screenshotGpu);
+                        frameTimestamp = std::chrono::steady_clock::now();
+                        trt_detector.processFrameGpu(screenshotGpu, frameTimestamp);
                         cudaDiag.gpuSubmitted++;
                         frameSubmittedToDetector = true;
 
@@ -753,6 +751,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     cudaDiag.cpuFallbackAttempts++;
 #endif
                 screenshotCpu = capturer->GetNextFrameCpu();
+                frameTimestamp = std::chrono::steady_clock::now();
 
                 if (screenshotCpu.empty())
                 {
@@ -941,7 +940,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (currentCfg.backend == "DML" && dml_detector)
                 {
-                    dml_detector->processFrame(detectionFrame, screenshotCpu);
+                    dml_detector->processFrame(detectionFrame, screenshotCpu, frameTimestamp);
 #ifdef USE_CUDA
                     cudaDiag.dmlSubmitted++;
 #endif
@@ -949,7 +948,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 #ifdef USE_CUDA
                 else if (currentCfg.backend == "TRT")
                 {
-                    trt_detector.processFrame(detectionFrame, screenshotCpu);
+                    trt_detector.processFrame(detectionFrame, screenshotCpu, frameTimestamp);
                     cudaDiag.trtCpuSubmitted++;
                 }
 #endif

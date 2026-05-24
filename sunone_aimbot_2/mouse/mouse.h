@@ -76,6 +76,7 @@ private:
     aim::AimKalman2D              targetKalman;
     aim::AimKalmanTelemetry       lastKalmanTelemetry;
     double                        lastPredictionLookaheadSec = 0.0;
+    double                        lastDetectionDelaySec = 0.0;
 
     void moveWorkerLoop();
     void queueMove(int dx, int dy);
@@ -86,6 +87,7 @@ private:
     void   resetWindState();
     void   appendWindDebugStep(int dx, int dy);
     void   pruneWindDebugTrailLocked(const std::chrono::steady_clock::time_point& now);
+    std::pair<double, double> mouseCountsToScreenPixels(int dx, int dy) const;
 
     struct WindDebugPoint
     {
@@ -116,9 +118,21 @@ private:
     double                                 windDebugCursorX = 0.0;
     double                                 windDebugCursorY = 0.0;
 
+    struct MotionCompensationSample
+    {
+        double x = 0.0;
+        double y = 0.0;
+        std::chrono::steady_clock::time_point t{};
+    };
+
+    mutable std::mutex motionCompensationMutex;
+    std::deque<MotionCompensationSample> motionCompensationTrail;
+    void recordMotionCompensationStep(int dx, int dy);
+    void pruneMotionCompensationTrailLocked(const std::chrono::steady_clock::time_point& now);
+
     std::pair<double, double> calc_movement(double target_x, double target_y);
     double calculate_speed_multiplier(double distance);
-    double currentDetectionDelaySec() const;
+    double currentDetectionDelaySec(double observationAgeSec = -1.0) const;
     double currentPredictionLookaheadSec(double detectionDelaySec) const;
 
 public:
@@ -155,9 +169,16 @@ public:
         float bScope_multiplier
     );
 
-    void moveMousePivot(double pivotX, double pivotY);
+    void moveMousePivot(
+        double pivotX,
+        double pivotY,
+        std::chrono::steady_clock::time_point observationTime = {});
+    void moveRelative(int dx, int dy);
     void clearQueuedMoves();
-    std::pair<double, double> predict_target_position(double target_x, double target_y);
+    std::pair<double, double> predict_target_position(
+        double target_x,
+        double target_y,
+        std::chrono::steady_clock::time_point observationTime = {});
     void moveMouse(const AimbotTarget& target);
     void pressMouse(const AimbotTarget& target);
     void releaseMouse();
@@ -172,6 +193,8 @@ public:
     std::vector<std::pair<double, double>> getFuturePositions();
     void clearWindDebugTrail();
     std::vector<std::pair<double, double>> getWindDebugTrail();
+    std::pair<double, double> getMotionCompensationSince(
+        std::chrono::steady_clock::time_point since) const;
 
     void setArduinoConnection(Arduino* newArduino);
     void setRP2350Connection(RP2350* newRP2350);
