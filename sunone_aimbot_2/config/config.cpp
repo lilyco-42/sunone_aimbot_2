@@ -220,6 +220,7 @@ bool Config::loadConfig(const std::string& filename)
         game_overlay_enabled = false;
         game_overlay_max_fps = 0;
         game_overlay_draw_boxes = true;
+        game_overlay_compensate_latency = true;
         game_overlay_draw_future = true;
         game_overlay_draw_wind_tail = true;
         game_overlay_draw_frame = true;
@@ -605,6 +606,7 @@ bool Config::loadConfig(const std::string& filename)
     game_overlay_enabled = get_bool("game_overlay_enabled", false);
     game_overlay_max_fps = get_long("game_overlay_max_fps", 0);
     game_overlay_draw_boxes = get_bool("game_overlay_draw_boxes", true);
+    game_overlay_compensate_latency = get_bool("game_overlay_compensate_latency", true);
     game_overlay_draw_future = get_bool("game_overlay_draw_future", true);
     game_overlay_draw_wind_tail = get_bool("game_overlay_draw_wind_tail", true);
     game_overlay_draw_frame = get_bool("game_overlay_draw_frame", true);
@@ -936,6 +938,7 @@ bool Config::saveConfig(const std::string& filename)
         << "game_overlay_enabled = " << (game_overlay_enabled ? "true" : "false") << "\n"
         << "game_overlay_max_fps = " << game_overlay_max_fps << "\n"
         << "game_overlay_draw_boxes = " << (game_overlay_draw_boxes ? "true" : "false") << "\n"
+        << "game_overlay_compensate_latency = " << (game_overlay_compensate_latency ? "true" : "false") << "\n"
         << "game_overlay_draw_future = " << (game_overlay_draw_future ? "true" : "false") << "\n"
         << "game_overlay_draw_wind_tail = " << (game_overlay_draw_wind_tail ? "true" : "false") << "\n"
         << "game_overlay_draw_frame = " << (game_overlay_draw_frame ? "true" : "false") << "\n"

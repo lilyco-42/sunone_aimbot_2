@@ -407,7 +407,10 @@ int DirectMLDetector::getNumberOfClasses()
     }
 }
 
-void DirectMLDetector::processFrame(const cv::Mat& detection_frame, const cv::Mat& source_frame)
+void DirectMLDetector::processFrame(
+    const cv::Mat& detection_frame,
+    const cv::Mat& source_frame,
+    std::chrono::steady_clock::time_point frameTimestamp)
 {
     if (detectionPaused)
     {
@@ -417,6 +420,9 @@ void DirectMLDetector::processFrame(const cv::Mat& detection_frame, const cv::Ma
     std::unique_lock<std::mutex> lock(inferenceMutex);
     currentFrame = detection_frame;
     currentSourceFrame = source_frame.empty() ? detection_frame : source_frame;
+    currentFrameTimestamp = (frameTimestamp.time_since_epoch().count() != 0)
+        ? frameTimestamp
+        : std::chrono::steady_clock::now();
     frameReady = true;
     inferenceCV.notify_one();
 }
@@ -449,6 +455,7 @@ void DirectMLDetector::dmlInferenceThread()
 
             cv::Mat frame;
             cv::Mat sourceFrame;
+            std::chrono::steady_clock::time_point frameTimestamp{};
             bool hasNewFrame = false;
             {
                 std::unique_lock<std::mutex> lock(inferenceMutex);
@@ -461,6 +468,7 @@ void DirectMLDetector::dmlInferenceThread()
                 {
                     frame = std::move(currentFrame);
                     sourceFrame = std::move(currentSourceFrame);
+                    frameTimestamp = currentFrameTimestamp;
                     frameReady = false;
                     hasNewFrame = true;
                 }
@@ -491,7 +499,7 @@ void DirectMLDetector::dmlInferenceThread()
                     confidences.push_back(d.confidence);
                 }
 
-                detectionBuffer.set(boxes, classes);
+                detectionBuffer.set(boxes, classes, frameTimestamp);
 
                 std::string aiModel;
                 Config configSnapshot;

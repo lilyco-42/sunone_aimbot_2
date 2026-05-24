@@ -166,6 +166,7 @@ public:
     bool game_overlay_enabled;
     int game_overlay_max_fps;
     bool game_overlay_draw_boxes;
+    bool game_overlay_compensate_latency;
     bool game_overlay_draw_future;
     bool game_overlay_draw_wind_tail;
     bool game_overlay_draw_frame;

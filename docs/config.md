@@ -275,6 +275,7 @@ Depth features require CUDA build.
 | `game_overlay_enabled` | bool | `false` | Master toggle |
 | `game_overlay_max_fps` | int | `0` | UI `0..256`; `0` uncapped |
 | `game_overlay_draw_boxes` | bool | `true` | Draw detection boxes |
+| `game_overlay_compensate_latency` | bool | `true` | Offset overlay boxes/icons by tracked capture-to-render mouse movement |
 | `game_overlay_draw_future` | bool | `true` | Draw future points |
 | `game_overlay_draw_wind_tail` | bool | `true` | Draw WindMouse tail |
 | `game_overlay_draw_frame` | bool | `true` | Draw capture frame |

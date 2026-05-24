@@ -35,6 +35,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
     int lastVersion = -1;
     std::vector<cv::Rect> boxes;
     std::vector<int> classes;
+    std::chrono::steady_clock::time_point detectionTimestamp{};
     MultiTargetTracker targetTracker;
     std::optional<AimbotTarget> activeTarget;
     int activeTrackId = -1;
@@ -87,6 +88,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
             {
                 boxes = detectionBuffer.boxes;
                 classes = detectionBuffer.classes;
+                detectionTimestamp = detectionBuffer.frameTimestamp;
                 lastVersion = detectionBuffer.version;
                 hasNewDetection = true;
             }
@@ -132,7 +134,8 @@ void mouseThreadFunction(MouseThread& mouseThread)
                 detectionResolution,
                 detectionResolution,
                 disableHeadshot,
-                aimingNow
+                aimingNow,
+                detectionTimestamp
             );
             lastTrackerUpdate = std::chrono::steady_clock::now();
             {
@@ -188,7 +191,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
         {
             if (activeTarget && hasAimObservation)
             {
-                mouseThread.moveMousePivot(activeTarget->pivotX, activeTarget->pivotY);
+                mouseThread.moveMousePivot(activeTarget->pivotX, activeTarget->pivotY, detectionTimestamp);
 
                 if (autoShoot)
                 {

@@ -216,9 +216,12 @@ void MultiTargetTracker::update(
     int screenWidth,
     int screenHeight,
     bool disableHeadshot,
-    bool keepCurrentLock)
+    bool keepCurrentLock,
+    std::chrono::steady_clock::time_point observationTime)
 {
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = (observationTime.time_since_epoch().count() != 0)
+        ? observationTime
+        : std::chrono::steady_clock::now();
     int classPlayer = 0;
     int classHead = 1;
     float bodyOffset = 0.15f;
@@ -631,6 +634,9 @@ std::vector<TrackDebugInfo> MultiTargetTracker::getDebugTracks() const
         );
         d.pivotX = t.pivotX;
         d.pivotY = t.pivotY;
+        d.velocityX = t.velocity.x;
+        d.velocityY = t.velocity.y;
+        d.lastUpdate = t.lastUpdate;
         d.observedThisFrame = t.observedThisFrame;
         d.missedFrames = t.missed;
         d.isLocked = (t.id == lockedTrackId_);

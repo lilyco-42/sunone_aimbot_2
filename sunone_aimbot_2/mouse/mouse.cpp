@@ -84,6 +84,7 @@ MouseThread::MouseThread(
     targetKalman.reset();
     lastKalmanTelemetry = {};
     lastPredictionLookaheadSec = 0.0;
+    lastDetectionDelaySec = 0.0;
 
     moveWorker = std::thread(&MouseThread::moveWorkerLoop, this);
 }
@@ -119,6 +120,7 @@ void MouseThread::updateConfig(
     targetKalman.reset();
     lastKalmanTelemetry = {};
     lastPredictionLookaheadSec = 0.0;
+    lastDetectionDelaySec = 0.0;
 }
 
 MouseThread::~MouseThread()
@@ -303,6 +305,40 @@ void MouseThread::appendWindDebugStep(int dx, int dy)
     if (dx == 0 && dy == 0)
         return;
 
+    auto delta = mouseCountsToScreenPixels(dx, dy);
+    double deltaPxX = delta.first;
+    double deltaPxY = delta.second;
+    if (std::abs(deltaPxX) < 1e-8 && std::abs(deltaPxY) < 1e-8)
+        return;
+    std::lock_guard<std::mutex> lock(windDebugTrailMutex);
+    const auto now = std::chrono::steady_clock::now();
+    pruneWindDebugTrailLocked(now);
+
+    if (windDebugTrail.empty())
+    {
+        windDebugCursorX = center_x;
+        windDebugCursorY = center_y;
+        windDebugTrail.push_back({ windDebugCursorX, windDebugCursorY, now });
+    }
+
+    windDebugCursorX += deltaPxX;
+    windDebugCursorY += deltaPxY;
+    windDebugTrail.push_back({ windDebugCursorX, windDebugCursorY, now });
+
+    constexpr size_t maxTrailPoints = 220;
+    while (windDebugTrail.size() > maxTrailPoints)
+        windDebugTrail.pop_front();
+}
+
+void MouseThread::pruneWindDebugTrailLocked(const std::chrono::steady_clock::time_point& now)
+{
+    constexpr auto windTrailLifetime = std::chrono::milliseconds(900);
+    while (!windDebugTrail.empty() && (now - windDebugTrail.front().t) > windTrailLifetime)
+        windDebugTrail.pop_front();
+}
+
+std::pair<double, double> MouseThread::mouseCountsToScreenPixels(int dx, int dy) const
+{
     double deltaPxX = static_cast<double>(dx);
     double deltaPxY = static_cast<double>(dy);
 
@@ -338,56 +374,86 @@ void MouseThread::appendWindDebugStep(int dx, int dy)
         }
     }
 
-    std::lock_guard<std::mutex> lock(windDebugTrailMutex);
-    const auto now = std::chrono::steady_clock::now();
-    pruneWindDebugTrailLocked(now);
+    return { deltaPxX, deltaPxY };
+}
 
-    if (windDebugTrail.empty())
+void MouseThread::recordMotionCompensationStep(int dx, int dy)
+{
+    if (dx == 0 && dy == 0)
+        return;
+
+    const auto delta = mouseCountsToScreenPixels(dx, dy);
+    if (std::abs(delta.first) < 1e-8 && std::abs(delta.second) < 1e-8)
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(motionCompensationMutex);
+    pruneMotionCompensationTrailLocked(now);
+    motionCompensationTrail.push_back({ delta.first, delta.second, now });
+
+    constexpr size_t maxSamples = 512;
+    while (motionCompensationTrail.size() > maxSamples)
+        motionCompensationTrail.pop_front();
+}
+
+void MouseThread::pruneMotionCompensationTrailLocked(const std::chrono::steady_clock::time_point& now)
+{
+    constexpr auto motionTrailLifetime = std::chrono::seconds(2);
+    while (!motionCompensationTrail.empty() && (now - motionCompensationTrail.front().t) > motionTrailLifetime)
+        motionCompensationTrail.pop_front();
+}
+
+std::pair<double, double> MouseThread::getMotionCompensationSince(
+    std::chrono::steady_clock::time_point since) const
+{
+    if (since.time_since_epoch().count() == 0)
+        return { 0.0, 0.0 };
+
+    double x = 0.0;
+    double y = 0.0;
+    std::lock_guard<std::mutex> lock(motionCompensationMutex);
+    for (const auto& sample : motionCompensationTrail)
     {
-        windDebugCursorX = center_x;
-        windDebugCursorY = center_y;
-        windDebugTrail.push_back({ windDebugCursorX, windDebugCursorY, now });
+        if (sample.t >= since)
+        {
+            x += sample.x;
+            y += sample.y;
+        }
     }
 
-    windDebugCursorX += deltaPxX;
-    windDebugCursorY += deltaPxY;
-    windDebugTrail.push_back({ windDebugCursorX, windDebugCursorY, now });
-
-    constexpr size_t maxTrailPoints = 220;
-    while (windDebugTrail.size() > maxTrailPoints)
-        windDebugTrail.pop_front();
+    return { x, y };
 }
 
-void MouseThread::pruneWindDebugTrailLocked(const std::chrono::steady_clock::time_point& now)
-{
-    constexpr auto windTrailLifetime = std::chrono::milliseconds(900);
-    while (!windDebugTrail.empty() && (now - windDebugTrail.front().t) > windTrailLifetime)
-        windDebugTrail.pop_front();
-}
-
-double MouseThread::currentDetectionDelaySec() const
+double MouseThread::currentDetectionDelaySec(double observationAgeSec) const
 {
     double detectionDelaySec = 0.05;
-    std::string backend;
+    if (std::isfinite(observationAgeSec) && observationAgeSec >= 0.0)
     {
-        std::lock_guard<std::mutex> lock(configMutex);
-        backend = config.backend;
+        detectionDelaySec = observationAgeSec;
     }
-
-    if (backend == "DML")
-    {
-        if (dml_detector)
-            detectionDelaySec = dml_detector->lastInferenceTimeDML.count() * 0.001;
-    }
-#ifdef USE_CUDA
     else
     {
-        detectionDelaySec = trt_detector.lastInferenceTime.count() * 0.001;
-    }
+        std::string backend;
+        {
+            std::lock_guard<std::mutex> lock(configMutex);
+            backend = config.backend;
+        }
+
+        if (backend == "DML")
+        {
+            if (dml_detector)
+                detectionDelaySec = dml_detector->lastInferenceTimeDML.count() * 0.001;
+        }
+#ifdef USE_CUDA
+        else
+        {
+            detectionDelaySec = trt_detector.lastInferenceTime.count() * 0.001;
+        }
 #endif
+    }
     if (!std::isfinite(detectionDelaySec))
         detectionDelaySec = 0.05;
-    return std::clamp(detectionDelaySec, 0.0, 0.2);
+    return std::clamp(detectionDelaySec, 0.0, 0.35);
 }
 
 double MouseThread::currentPredictionLookaheadSec(double detectionDelaySec) const
@@ -407,33 +473,47 @@ double MouseThread::currentPredictionLookaheadSec(double detectionDelaySec) cons
     return std::clamp(lookahead, 0.0, 1.5);
 }
 
-std::pair<double, double> MouseThread::predict_target_position(double target_x, double target_y)
+std::pair<double, double> MouseThread::predict_target_position(
+    double target_x,
+    double target_y,
+    std::chrono::steady_clock::time_point observationTime)
 {
     auto current_time = std::chrono::steady_clock::now();
+    if (observationTime.time_since_epoch().count() == 0)
+        observationTime = current_time;
+
+    double observationAgeSec = std::chrono::duration<double>(current_time - observationTime).count();
+    if (!std::isfinite(observationAgeSec) || observationAgeSec < 0.0)
+        observationAgeSec = 0.0;
+
     targetKalman.setSettings(buildKalmanSettingsFromConfig());
 
     if (prev_time.time_since_epoch().count() == 0 || !target_detected.load())
     {
-        prev_time = current_time;
+        prev_time = observationTime;
         prev_x = target_x;
         prev_y = target_y;
         prev_velocity_x = 0.0;
         prev_velocity_y = 0.0;
         targetKalman.reset();
-        lastKalmanTelemetry = targetKalman.update(target_x, target_y, 1.0 / 120.0, 0.0);
-        lastPredictionLookaheadSec = 0.0;
+        const double detectionDelaySec = currentDetectionDelaySec(observationAgeSec);
+        const double lookaheadSec = currentPredictionLookaheadSec(detectionDelaySec);
+        lastKalmanTelemetry = targetKalman.update(target_x, target_y, 1.0 / 120.0, lookaheadSec);
+        lastDetectionDelaySec = detectionDelaySec;
+        lastPredictionLookaheadSec = lookaheadSec;
         return { target_x, target_y };
     }
 
-    double dt = std::chrono::duration<double>(current_time - prev_time).count();
+    double dt = std::chrono::duration<double>(observationTime - prev_time).count();
     if (dt < 1e-8) dt = 1e-8;
 
-    prev_time = current_time;
+    prev_time = observationTime;
     prev_x = target_x;
     prev_y = target_y;
 
-    const double detectionDelaySec = currentDetectionDelaySec();
+    const double detectionDelaySec = currentDetectionDelaySec(observationAgeSec);
     const double lookaheadSec = currentPredictionLookaheadSec(detectionDelaySec);
+    lastDetectionDelaySec = detectionDelaySec;
     lastPredictionLookaheadSec = lookaheadSec;
 
     lastKalmanTelemetry = targetKalman.update(target_x, target_y, dt, lookaheadSec);
@@ -462,7 +542,8 @@ void MouseThread::sendMovementToDriver(int dx, int dy)
         return;
     }
 
-    mouseInput->move(dx, dy);
+    if (mouseInput->move(dx, dy))
+        recordMotionCompensationStep(dx, dy);
 }
 
 void MouseThread::moveRelative(int dx, int dy)
@@ -556,10 +637,20 @@ void MouseThread::moveMouse(const AimbotTarget& target)
     queueMove(static_cast<int>(mv.first), static_cast<int>(mv.second));
 }
 
-void MouseThread::moveMousePivot(double pivotX, double pivotY)
+void MouseThread::moveMousePivot(
+    double pivotX,
+    double pivotY,
+    std::chrono::steady_clock::time_point observationTime)
 {
     std::lock_guard lg(input_method_mutex);
-    auto predicted = predict_target_position(pivotX, pivotY);
+    if (observationTime.time_since_epoch().count() != 0)
+    {
+        auto cameraDelta = getMotionCompensationSince(observationTime);
+        pivotX -= cameraDelta.first;
+        pivotY -= cameraDelta.second;
+    }
+
+    auto predicted = predict_target_position(pivotX, pivotY, observationTime);
     auto mv = calc_movement(predicted.first, predicted.second);
     int mx = static_cast<int>(mv.first);
     int my = static_cast<int>(mv.second);
@@ -642,6 +733,7 @@ void MouseThread::resetPrediction()
     targetKalman.reset();
     lastKalmanTelemetry = {};
     lastPredictionLookaheadSec = 0.0;
+    lastDetectionDelaySec = 0.0;
     target_detected.store(false);
 }
 
@@ -676,7 +768,9 @@ std::vector<std::pair<double, double>> MouseThread::predictFuturePositions(doubl
     targetKalman.setSettings(buildKalmanSettingsFromConfig());
     if (targetKalman.initialized())
     {
-        const double detectionDelaySec = currentDetectionDelaySec();
+        const double detectionDelaySec = (lastDetectionDelaySec > 0.0)
+            ? lastDetectionDelaySec
+            : currentDetectionDelaySec();
         const double baseLookaheadSec = currentPredictionLookaheadSec(detectionDelaySec);
         for (int i = 1; i <= frames; ++i)
         {

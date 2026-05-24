@@ -578,6 +578,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             cv::Mat screenshotCpu;
             cv::Mat detectionFrame;
+            std::chrono::steady_clock::time_point frameTimestamp{};
             bool frameSubmittedToDetector = false;
 
 #ifdef USE_CUDA
@@ -615,7 +616,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     cv::cuda::GpuMat screenshotGpu;
                     if (duplicationCapture->GetNextFrameGpu(screenshotGpu))
                     {
-                        trt_detector.processFrameGpu(screenshotGpu);
+                        frameTimestamp = std::chrono::steady_clock::now();
+                        trt_detector.processFrameGpu(screenshotGpu, frameTimestamp);
                         frameSubmittedToDetector = true;
 
                         if (needCpuCopyFromGpu)
@@ -628,6 +630,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             if (!frameSubmittedToDetector)
             {
                 screenshotCpu = capturer->GetNextFrameCpu();
+                frameTimestamp = std::chrono::steady_clock::now();
 
                 if (screenshotCpu.empty())
                 {
@@ -800,12 +803,12 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                 if (currentCfg.backend == "DML" && dml_detector)
                 {
-                    dml_detector->processFrame(detectionFrame, screenshotCpu);
+                    dml_detector->processFrame(detectionFrame, screenshotCpu, frameTimestamp);
                 }
 #ifdef USE_CUDA
                 else if (currentCfg.backend == "TRT")
                 {
-                    trt_detector.processFrame(detectionFrame, screenshotCpu);
+                    trt_detector.processFrame(detectionFrame, screenshotCpu, frameTimestamp);
                 }
 #endif
             }

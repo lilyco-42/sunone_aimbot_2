@@ -644,7 +644,10 @@ void TrtDetector::loadEngine(const std::string& modelFile)
     engine.reset(loadEngineFromFile(engineFilePath, runtime.get()));
 }
 
-void TrtDetector::processFrame(const cv::Mat& detection_frame, const cv::Mat& source_frame)
+void TrtDetector::processFrame(
+    const cv::Mat& detection_frame,
+    const cv::Mat& source_frame,
+    std::chrono::steady_clock::time_point frameTimestamp)
 {
     {
         std::lock_guard<std::mutex> lock(configMutex);
@@ -661,12 +664,17 @@ void TrtDetector::processFrame(const cv::Mat& detection_frame, const cv::Mat& so
     currentFrame = detection_frame;
     currentSourceFrame = source_frame.empty() ? detection_frame : source_frame;
     currentFrameGpu.release();
+    currentFrameTimestamp = (frameTimestamp.time_since_epoch().count() != 0)
+        ? frameTimestamp
+        : std::chrono::steady_clock::now();
     pendingFrameType = PendingFrameType::Cpu;
     frameReady = true;
     inferenceCV.notify_one();
 }
 
-void TrtDetector::processFrameGpu(const cv::cuda::GpuMat& frame)
+void TrtDetector::processFrameGpu(
+    const cv::cuda::GpuMat& frame,
+    std::chrono::steady_clock::time_point frameTimestamp)
 {
     {
         std::lock_guard<std::mutex> lock(configMutex);
@@ -683,6 +691,9 @@ void TrtDetector::processFrameGpu(const cv::cuda::GpuMat& frame)
     currentFrame.release();
     currentSourceFrame.release();
     currentFrameGpu = frame;
+    currentFrameTimestamp = (frameTimestamp.time_since_epoch().count() != 0)
+        ? frameTimestamp
+        : std::chrono::steady_clock::now();
     pendingFrameType = PendingFrameType::Gpu;
     frameReady = true;
     inferenceCV.notify_one();
@@ -748,6 +759,7 @@ void TrtDetector::inferenceThread()
         cv::Mat frame;
         cv::Mat sourceFrame;
         cv::cuda::GpuMat frameGpu;
+        std::chrono::steady_clock::time_point frameTimestamp{};
         PendingFrameType frameType = PendingFrameType::None;
         bool hasNewFrame = false;
 
@@ -759,10 +771,11 @@ void TrtDetector::inferenceThread()
             if (shouldExit || ::shouldExit) break;
 
             if (frameReady)
-            {
-                frameType = pendingFrameType;
-                if (frameType == PendingFrameType::Gpu)
                 {
+                    frameType = pendingFrameType;
+                    frameTimestamp = currentFrameTimestamp;
+                    if (frameType == PendingFrameType::Gpu)
+                    {
                     frameGpu = currentFrameGpu;
                     currentFrameGpu.release();
                     currentFrame.release();
@@ -890,7 +903,7 @@ void TrtDetector::inferenceThread()
                     confidences.push_back(det.confidence);
                 }
 
-                detectionBuffer.set(boxes, classes);
+                detectionBuffer.set(boxes, classes, frameTimestamp);
 
                 std::string aiModel;
                 Config configSnapshot;

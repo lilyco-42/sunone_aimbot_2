@@ -31,6 +31,9 @@ void draw_game_overlay_settings()
         if (ImGui::Checkbox("Draw Detection Boxes", &config.game_overlay_draw_boxes))
             OverlayConfig_MarkDirty();
 
+        if (ImGui::Checkbox("Compensate Overlay Latency", &config.game_overlay_compensate_latency))
+            OverlayConfig_MarkDirty();
+
         if (ImGui::Checkbox("Draw Future Positions", &config.game_overlay_draw_future))
             OverlayConfig_MarkDirty();
 
