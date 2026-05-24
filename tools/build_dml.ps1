@@ -36,6 +36,7 @@ try {
     $ninja = Ensure-Ninja -AllowDownload:$allowDownloads -DryRun:$DryRun
     Restore-NuGetPackages -UseLatest:$UseLatestPackages -AllowDownload:$allowDownloads -DryRun:$DryRun
     Ensure-CoreSourceModules -AllowDownload:$allowDownloads -DryRun:$DryRun
+    Ensure-TrainingBaseModels -DryRun:$DryRun
 
     $opencvDmlRoot = Resolve-RepoPath "sunone_aimbot_2\modules\opencv\build\dml"
     $opencvLayout = Get-OpenCvWorldLayout -Root $opencvDmlRoot -Configuration $Configuration

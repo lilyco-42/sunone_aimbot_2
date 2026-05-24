@@ -39,6 +39,7 @@ try {
     $ninja = Ensure-Ninja -AllowDownload:$allowDownloads -DryRun:$DryRun
     Restore-NuGetPackages -UseLatest:$UseLatestPackages -AllowDownload:$allowDownloads -DryRun:$DryRun
     Ensure-CoreSourceModules -AllowDownload:$allowDownloads -DryRun:$DryRun
+    Ensure-TrainingBaseModels -DryRun:$DryRun
 
     $resolution = Get-BestCompatibleCudaDependencySet
     if (-not [string]::IsNullOrWhiteSpace($CudaArchBin)) {
