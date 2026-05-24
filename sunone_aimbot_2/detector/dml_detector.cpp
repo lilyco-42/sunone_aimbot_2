@@ -400,6 +400,7 @@ void DirectMLDetector::processFrame(const cv::Mat& detection_frame, const cv::Ma
         std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
         detectionBuffer.boxes.clear();
         detectionBuffer.classes.clear();
+        detectionBuffer.confidences.clear();
         detectionBuffer.version++;
         detectionBuffer.cv.notify_all();
         return;
@@ -430,6 +431,7 @@ void DirectMLDetector::dmlInferenceThread()
                 std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
                 detectionBuffer.boxes.clear();
                 detectionBuffer.classes.clear();
+                detectionBuffer.confidences.clear();
                 detectionBuffer.version++;
                 detectionBuffer.cv.notify_all();
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -485,6 +487,7 @@ void DirectMLDetector::dmlInferenceThread()
                     std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
                     detectionBuffer.boxes = boxes;
                     detectionBuffer.classes = classes;
+                    detectionBuffer.confidences = confidences;
                     detectionBuffer.version++;
                     detectionBuffer.cv.notify_all();
                 }

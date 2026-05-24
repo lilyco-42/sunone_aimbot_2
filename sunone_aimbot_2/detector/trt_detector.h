@@ -83,7 +83,11 @@ private:
     void preProcess(const cv::cuda::GpuMat& frame);
     void copyCpuTensorToDevice(const cv::Mat& rgbFloatFrame, int width, int height, void* inputBuffer);
 
-    cv::Mat cpuDownloadedFrame;
+    cv::cuda::GpuMat gpuFrameBuffer;
+    cv::cuda::GpuMat gpuResizedBuffer;
+    cv::cuda::GpuMat gpuFloatBuffer;
+    cv::cuda::Stream cvStream;
+
     cv::Mat cpuBgrBuffer;
     cv::Mat cpuResizedBuffer;
     cv::Mat cpuRgbBuffer;

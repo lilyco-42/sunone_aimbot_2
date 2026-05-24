@@ -1621,6 +1621,15 @@ void gameOverlayRenderLoop()
                     label += L" *";
                 if (!t.observedThisFrame)
                     label += L" m" + std::to_wstring(t.missedFrames);
+                if (config.neural_tracker_debug_enabled)
+                {
+                    wchar_t neuralLabel[64] = {};
+                    if (t.lastNeuralEvaluated)
+                        swprintf_s(neuralLabel, L" n%.2f b%.2f", t.lastNeuralScore, t.lastNeuralBonus);
+                    else
+                        swprintf_s(neuralLabel, L" c%.2f", static_cast<double>(t.confidence));
+                    label += neuralLabel;
+                }
 
                 const uint32_t textCol =
                     (t.trackId == lockedTrackId || t.isLocked)

@@ -7,6 +7,9 @@
 #include <fstream>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <opencv2/core/cuda_stream_accessor.hpp>
+#include <opencv2/cudaimgproc.hpp>
+#include <opencv2/cudawarping.hpp>
 #include <opencv2/dnn.hpp>
 #include <algorithm>
 #include <atomic>
@@ -21,6 +24,7 @@
 #include "sunone_aimbot_2.h"
 #include "other_tools.h"
 #include "postProcess.h"
+#include "cuda_preprocess.h"
 #include "depth/depth_mask.h"
 #include "capture.h"
 #include "capture/circle_fov.h"
@@ -495,6 +499,10 @@ void TrtDetector::initialize(const std::string& modelFile)
 
     img_scale = static_cast<float>(config.detection_resolution) / w;
 
+    gpuResizedBuffer.create(h, w, CV_8UC3);
+    gpuFloatBuffer.create(h, w, CV_32FC3);
+    cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
+
     cpuResizedBuffer.create(h, w, CV_8UC3);
     cpuRgbBuffer.create(h, w, CV_8UC3);
     cpuFloatBuffer.create(h, w, CV_32FC3);
@@ -617,6 +625,7 @@ void TrtDetector::processFrame(const cv::Mat& detection_frame, const cv::Mat& so
         std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
         detectionBuffer.boxes.clear();
         detectionBuffer.classes.clear();
+        detectionBuffer.confidences.clear();
         detectionBuffer.version++;
         detectionBuffer.cv.notify_all();
         return;
@@ -640,6 +649,7 @@ void TrtDetector::processFrameGpu(const cv::cuda::GpuMat& frame)
         std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
         detectionBuffer.boxes.clear();
         detectionBuffer.classes.clear();
+        detectionBuffer.confidences.clear();
         detectionBuffer.version++;
         detectionBuffer.cv.notify_all();
         return;
@@ -848,6 +858,7 @@ void TrtDetector::inferenceThread()
                     std::lock_guard<std::mutex> lock(detectionBuffer.mutex);
                     detectionBuffer.boxes = boxes;
                     detectionBuffer.classes = classes;
+                    detectionBuffer.confidences = confidences;
                     detectionBuffer.version++;
                     detectionBuffer.cv.notify_all();
                 }
@@ -954,8 +965,61 @@ void TrtDetector::preProcess(const cv::cuda::GpuMat& frame)
     if (frame.empty())
         return;
 
-    frame.download(cpuDownloadedFrame);
-    preProcess(cpuDownloadedFrame);
+    void* inputBuffer = inputBindings[inputName];
+    if (!inputBuffer)
+        return;
+
+    nvinfer1::Dims dims = context->getTensorShape(inputName.c_str());
+    int c = 0;
+    int h = 0;
+    int w = 0;
+    if (!tryGetPositiveDimInt(dims.d[1], &c)
+        || !tryGetPositiveDimInt(dims.d[2], &h)
+        || !tryGetPositiveDimInt(dims.d[3], &w))
+    {
+        return;
+    }
+
+    if (c != 3)
+        return;
+
+    cv::cuda::GpuMat bgrFrame;
+    switch (frame.channels())
+    {
+    case 4:
+        cv::cuda::cvtColor(frame, gpuFrameBuffer, cv::COLOR_BGRA2BGR, 0, cvStream);
+        bgrFrame = gpuFrameBuffer;
+        break;
+    case 1:
+        cv::cuda::cvtColor(frame, gpuFrameBuffer, cv::COLOR_GRAY2BGR, 0, cvStream);
+        bgrFrame = gpuFrameBuffer;
+        break;
+    case 3:
+        bgrFrame = frame;
+        break;
+    default:
+        return;
+    }
+
+    cv::cuda::resize(bgrFrame, gpuResizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, cvStream);
+    gpuResizedBuffer.convertTo(gpuFloatBuffer, CV_32FC3, 1.0 / 255.0, 0.0, cvStream);
+
+    launch_hwc_to_chw_norm(
+        gpuFloatBuffer.ptr<float>(),
+        gpuFloatBuffer.step,
+        reinterpret_cast<float*>(inputBuffer),
+        w,
+        h,
+        stream);
+
+    if (config.verbose)
+    {
+        const cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess)
+        {
+            std::cerr << "[Detector] preprocess kernel launch error: " << cudaGetErrorString(err) << std::endl;
+        }
+    }
 }
 
 void TrtDetector::copyCpuTensorToDevice(const cv::Mat& rgbFloatFrame, int width, int height, void* inputBuffer)

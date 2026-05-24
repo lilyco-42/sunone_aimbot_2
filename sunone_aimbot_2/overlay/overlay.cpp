@@ -329,6 +329,7 @@ static const OverlayTabItem kOverlayTabs[] = {
     { "Target",        "Core",    "Target selection and aim point offsets.",             draw_target },
     { "Mouse",         "Core",    "Mouse behavior, input backend and motion profile.",   draw_mouse },
     { "AI",            "Core",    "Model and detector thresholds.",                      draw_ai },
+    { "Neural",        "Core",    "Optional learned target association.",                draw_neural },
     { "Buttons",       "Control", "Hotkeys for features and runtime actions.",           draw_buttons },
     { "Overlay",       "Control", "Editor appearance and privacy options.",              draw_overlay },
     { "Game Overlay",  "Control", "In-game render visuals and simulation options.",      draw_game_overlay_settings },
