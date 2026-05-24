@@ -272,14 +272,16 @@ Current config/UI controls:
 pid_governor_enabled = false
 pid_governor_speed = 5
 pid_governor_blend = 50
+pid_governor_lead_percent = 10
 ```
 
 Allowed ranges:
 
 - `pid_governor_speed`: `1..100`
 - `pid_governor_blend`: `1..100`
+- `pid_governor_lead_percent`: `0..50`
 
-These controls are available in the Neural tab and are packaged with the training assets. In the current source, PID governor runtime inference is not yet fully wired into the live mouse movement path, so enabling the setting should be treated as experimental/preparatory.
+These controls are available in the Neural tab and are packaged with the training assets. `pid_governor_lead_percent` is passed into NanoSim for manual tuning of target-speed lead. In the current source, PID governor runtime inference is not yet fully wired into the live mouse movement path, so enabling the setting should be treated as experimental/preparatory.
 
 ## Data Collection Guide
 
@@ -310,6 +312,37 @@ Use the no-options builder after the backend already builds and you only changed
 ```
 
 The no-options builder only asks DML or CUDA and then builds the existing CMake target. It does not download, restore, update, or rebuild OpenCV.
+
+## NanoSim Debug Harness
+
+`ai_debug.exe` is an optional diagnostic executable separate from the main runtime. It reads the same `config.ini`, launches `debug\nano_sim_3d`, and opens NanoSim in simulation-only diagnostic mode.
+
+Build it by configuring a backend with the debug harness enabled:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\BUILDER.ps1 -Backend DML -BuildDebugHarness
+```
+
+After that, fast rebuilds can target only the harness:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_no-options.ps1 -Backend DML -DebugHarness
+```
+
+The NanoSim page keeps POV mouse/camera movement available, but starts with NanoSim as the movement runtime so the simulator can auto-aim without touching hardware. Its Main GUI Mirror uses the same tab names as the main overlay and shows the current project model selection plus key knobs, including Auto Aim, confidence, NMS, capture FPS, detection size, FOV, Circle FOV, neural tracker blend, and PID governor speed/blend.
+
+Press `F3`, or the configured `button_pause` binding, to activate or deactivate simulation Auto Aim. This changes only the NanoSim controller state. The simulator keeps the target close to center and renders it as a procedural cartoon 3D character so convergence issues are easier to diagnose without first fighting extreme target motion.
+
+Convergence issues are ranked from most problematic to least across detection, tracking, controller, movement, runtime timing, and multi-module interaction evidence.
+
+For future program-in-the-loop testing, NanoSim exposes:
+
+```text
+window.nanoSimGetSnapshot()
+window.nanoSimApplyMovement(dx, dy)
+```
+
+Those browser APIs affect only the simulator environment. They do not call Razer, Teensy, Win32, or any other physical output path.
 
 ## Common Recipes
 

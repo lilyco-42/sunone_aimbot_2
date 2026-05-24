@@ -345,8 +345,8 @@ try {
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($CudaArchBin) -and $CudaArchBin.Trim().ToLowerInvariant() -eq "all") {
-        # Popular consumer NVIDIA architectures: GTX 16/RTX 20/30/40/50 series.
-        $CudaArchBin = "7.5;8.6;8.9;12.0"
+        # Broad NVIDIA compatibility set: Turing, Ampere/Ada, Hopper, and Blackwell variants.
+        $CudaArchBin = "7.5;8.0;8.6;8.7;8.8;8.9;9.0;10.0;10.3;11.0;12.0;12.1"
         Write-Step "Using CUDA_ARCH_BIN preset 'all': $CudaArchBin"
     }
     if ([string]::IsNullOrWhiteSpace($CudaArchBin)) {

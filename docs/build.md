@@ -8,7 +8,7 @@ This guide explains the current build system in plain terms first, then adds the
 |---|---|---|
 | `BUILDER.bat` | Most people building from source. | Opens an interactive choice for DML or CUDA, prepares dependencies, configures CMake, and builds. |
 | `BUILDER.ps1` | Same as above, but easier to script. | Lets you pass `-Backend DML` or `-Backend CUDA` directly. |
-| `build_no-options.bat` | Fast local rebuilds after the full build already worked once. | Only rebuilds the main `ai` target from an existing build tree. No downloads, updates, NuGet restore, OpenCV setup, or dependency prompts. |
+| `build_no-options.bat` | Fast local rebuilds after the full build already worked once. | Rebuilds `ai` from an existing build tree, or `ai_debug` with `-DebugHarness`. No downloads, updates, NuGet restore, OpenCV setup, or dependency prompts. |
 | `tools/build_dml.ps1` | Direct DML backend build. | Restores DML/ONNX dependencies and prepares the DML build tree. |
 | `tools/build_cuda.ps1` | Direct CUDA/TensorRT backend build. | Resolves CUDA/TensorRT/OpenCV CUDA dependencies and prepares the CUDA build tree. |
 
@@ -89,6 +89,7 @@ Useful options:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\BUILDER.ps1 -Backend CUDA -OpenCvAlreadyBuilt true
 powershell -NoProfile -ExecutionPolicy Bypass -File .\BUILDER.ps1 -Backend CUDA -DownloadOrUpdateNeeded false
 powershell -NoProfile -ExecutionPolicy Bypass -File .\BUILDER.ps1 -Backend DML -DryRun
+powershell -NoProfile -ExecutionPolicy Bypass -File .\BUILDER.ps1 -Backend DML -BuildDebugHarness
 ```
 
 `BUILDER.ps1` forwards backend-specific arguments to `tools/build_dml.ps1` or `tools/build_cuda.ps1`.
@@ -116,6 +117,14 @@ cmake --build build\<backend> --config Release --target ai --parallel
 
 It is useful when you changed C++ or UI code and want a quick rebuild. It is not a dependency setup tool. If the build tree is missing, stale, or configured for the wrong dependency paths, run `BUILDER.bat` again.
 
+To rebuild the optional NanoSim debug target from an already-configured tree:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_no-options.ps1 -Backend DML -DebugHarness
+```
+
+That target exists only if the build tree was configured with `AIMBOT_BUILD_DEBUG_HARNESS=ON`.
+
 ## Direct Backend Scripts
 
 DML:
@@ -134,8 +143,16 @@ Examples:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_cuda.ps1 -CudaArchBin 8.6
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_cuda.ps1 -CudaArchBin all
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_cuda.ps1 -SkipOpenCvBuild
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_dml.ps1 -UseLatestPackages
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\build_dml.ps1 -BuildDebugHarness
+```
+
+`-CudaArchBin all` expands to:
+
+```text
+7.5;8.0;8.6;8.7;8.8;8.9;9.0;10.0;10.3;11.0;12.0;12.1
 ```
 
 ## Output Folders
@@ -147,7 +164,14 @@ build\dml\Release\ai.exe
 build\cuda\Release\ai.exe
 ```
 
-The output folder also receives runtime DLLs and selected assets that the executable needs at runtime.
+When the debug harness is enabled, the additional output is:
+
+```text
+build\<backend>\Release\ai_debug.exe
+build\<backend>\Release\debug\nano_sim_3d
+```
+
+The output folder also receives runtime DLLs and selected assets that the executable needs at runtime. `ai_debug.exe` launches NanoSim in simulation mode by default, passes the current model/config knobs into the browser UI, and does not instantiate Razer, Teensy, Win32, kmbox, or other physical output paths.
 
 ## Runtime Files Copied by CMake
 
@@ -208,7 +232,9 @@ sunone_aimbot_2\modules\training\models\neural_tracker.onnx
 | `AIMBOT_USE_CUDA` | `ON` for CUDA + TensorRT, `OFF` for DML. |
 | `AIMBOT_COPY_RUNTIME_DLLS` | Copies runtime DLLs beside `ai.exe`. |
 | `AIMBOT_COPY_TRAINING_ASSETS` | Copies selected training scripts and base models beside `ai.exe`. |
+| `AIMBOT_BUILD_DEBUG_HARNESS` | Builds the separate `ai_debug.exe` NanoSim diagnostic harness. |
 | `AIMBOT_TRAINING_SOURCE_DIR` | Source folder for deployable training assets. |
+| `AIMBOT_NANOSIM_SOURCE_DIR` | Source folder copied beside `ai_debug.exe` as `debug\nano_sim_3d`. |
 | `AIMBOT_RAZER_CONTROL_DLL` | Source path for `chroma_lighting.dll`. |
 | `AIMBOT_OPENCV_DML_ROOT` | DML OpenCV layout root. |
 | `AIMBOT_OPENCV_CUDA_ROOT` | CUDA OpenCV layout root. |
@@ -267,3 +293,4 @@ This checks important source contracts such as:
 | Missing `chroma_lighting.dll` | Build or copy the Razer controls DLL to `sunone_aimbot_2\modules\razer-controls\x64\Release\chroma_lighting.dll` or next to `ai.exe`. |
 | Training bootstrap fails | Install training requirements or place the expected `.onnx` files in `sunone_aimbot_2\modules\training\models`. |
 | App runs but Razer or Teensy control does nothing | The selected control method does not fall back. Check the selected `input_method`, the Razer DLL, or the Teensy RawHID endpoint. |
+| `ai_debug.exe` opens NanoSim but Auto Aim is paused | Press the configured pause binding, normally `F3`, or enable Auto Aim in NanoSim's Target tab. The toggle affects only the simulator. |

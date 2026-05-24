@@ -35,6 +35,7 @@ echo   -DownloadOrUpdateNeeded $true
 echo   -UseLatestPackages
 echo   -OpenBrowserForDownloads
 echo   -CudaArchBin 8.6
+echo   -CudaArchBin all
 echo   -NonInteractive
 echo.
 echo Defaults:

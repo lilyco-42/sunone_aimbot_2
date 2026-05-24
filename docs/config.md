@@ -246,8 +246,9 @@ If the model is missing or the feature is disabled, the app uses the normal trac
 | `pid_governor_enabled` | `false` | Enables PID governor settings in the Neural tab/config surface. |
 | `pid_governor_speed` | `5` | Speed slider value. Clamped `1..100`. |
 | `pid_governor_blend` | `50` | Blend slider value. Clamped `1..100`. |
+| `pid_governor_lead_percent` | `10` | Target velocity lead percentage for NanoSim/manual PID tuning. Clamped `0..50`. |
 
-The current source packages PID governor training assets and exposes UI/config controls. Runtime mouse-governor inference is not yet fully wired as a live replacement for the movement controller.
+The current source packages PID governor training assets and exposes UI/config controls. The target lead value is wired into NanoSim for manual convergence testing. Runtime mouse-governor inference is not yet fully wired as a live replacement for the movement controller.
 
 ## CUDA
 
@@ -394,6 +395,8 @@ Data collection needs CPU-readable frames, so it can change capture performance 
 | `screenshot_button` | `None` | Screenshot hotkey. |
 | `screenshot_delay` | `500` | Screenshot delay in milliseconds. |
 | `verbose` | `false` | Enables more logging. |
+
+`ai_debug.exe` reads the same config file and passes selected values such as backend, model path, available models, `auto_aim`, `button_pause`, capture FPS, detection thresholds, FOV, Circle FOV, input method, neural tracker blend, and PID governor settings into NanoSim for diagnostics. It does not add new `config.ini` keys and does not use the selected physical control method.
 
 ## Game Profiles
 
