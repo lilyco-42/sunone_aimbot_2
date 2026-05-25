@@ -8,8 +8,9 @@
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/cuda_stream_accessor.hpp>
-#include <opencv2/dnn.hpp>
 #include <opencv2/cudaimgproc.hpp>
+#include <opencv2/cudawarping.hpp>
+#include <opencv2/dnn.hpp>
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -26,6 +27,7 @@
 #include "cuda_preprocess.h"
 #include "depth/depth_mask.h"
 #include "capture.h"
+#include "capture/circle_fov.h"
 #include "scr/data_collector.h"
 
 extern std::atomic<bool> detectionPaused;
@@ -38,12 +40,6 @@ extern std::atomic<bool> detection_resolution_changed;
 static bool error_logged = false;
 
 namespace {
-bool configVerbose()
-{
-    std::lock_guard<std::mutex> lock(configMutex);
-    return config.verbose;
-}
-
 bool tryGetDimInt(int64_t value, int* out)
 {
     if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max())
@@ -85,23 +81,13 @@ void filterDetectionsByDepthMask(std::vector<Detection>& detections)
     if (detections.empty())
         return;
 
-    bool depthInferenceEnabled = false;
-    bool depthMaskEnabled = false;
-    int depthMaskHoldFrames = 0;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        depthInferenceEnabled = config.depth_inference_enabled;
-        depthMaskEnabled = config.depth_mask_enabled;
-        depthMaskHoldFrames = config.depth_mask_hold_frames;
-    }
-
-    if (!depthInferenceEnabled || !depthMaskEnabled)
+    if (!config.depth_inference_enabled || !config.depth_mask_enabled)
     {
         holdTtl.release();
         return;
     }
 
-    const int holdFrames = std::clamp(depthMaskHoldFrames, 0, 120);
+    const int holdFrames = std::clamp(config.depth_mask_hold_frames, 0, 120);
     cv::Mat currentMask = getCurrentDetectionSuppressionMask();
     cv::Mat suppressionMask;
 
@@ -142,6 +128,24 @@ void filterDetectionsByDepthMask(std::vector<Detection>& detections)
             [&suppressionMask](const Detection& det) { return intersectsDepthMask(det.box, suppressionMask); }),
         detections.end());
 }
+
+void filterDetectionsByCircleFov(std::vector<Detection>& detections)
+{
+    if (detections.empty() || !config.circle_fov_enabled)
+        return;
+
+    const cv::Size detectionSize(config.detection_resolution, config.detection_resolution);
+    detections.erase(
+        std::remove_if(detections.begin(), detections.end(),
+            [&detectionSize](const Detection& det)
+            {
+                const cv::Point2f center(
+                    static_cast<float>(det.box.x) + static_cast<float>(det.box.width) * 0.5f,
+                    static_cast<float>(det.box.y) + static_cast<float>(det.box.height) * 0.5f);
+                return !pointInsideCircleFov(center, detectionSize, config.circle_fov_radius_percent);
+            }),
+        detections.end());
+}
 } // namespace
 
 TrtDetector::TrtDetector()
@@ -153,8 +157,6 @@ TrtDetector::TrtDetector()
     cudaGraphExec(nullptr),
     inputBufferDevice(nullptr),
     img_scale(1.0f),
-    img_scale_x(1.0f),
-    img_scale_y(1.0f),
     numClasses(0)
 {
     stream = nullptr;
@@ -177,6 +179,12 @@ TrtDetector::~TrtDetector()
     if (stream) cudaStreamDestroy(stream);
 }
 
+void TrtDetector::requestStop()
+{
+    shouldExit = true;
+    inferenceCV.notify_all();
+}
+
 void TrtDetector::freePinnedOutputs()
 {
     for (auto& kv : pinnedOutputBuffers)
@@ -185,12 +193,6 @@ void TrtDetector::freePinnedOutputs()
             cudaFreeHost(kv.second);
     }
     pinnedOutputBuffers.clear();
-}
-
-void TrtDetector::requestStop()
-{
-    shouldExit.store(true);
-    inferenceCV.notify_all();
 }
 
 void TrtDetector::allocatePinnedOutputs()
@@ -213,7 +215,7 @@ void TrtDetector::allocatePinnedOutputs()
 
         pinnedOutputBuffers[name] = hostPtr;
 
-        if (configVerbose())
+        if (config.verbose)
         {
             std::cout << "[Detector] Allocated pinned host buffer for output " << name
                 << ": " << bytes << " bytes" << std::endl;
@@ -301,7 +303,7 @@ void TrtDetector::getInputNames()
         if (engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT)
         {
             inputNames.emplace_back(name);
-            if (configVerbose())
+            if (config.verbose)
             {
                 std::cout << "[Detector] Detected input: " << name << std::endl;
             }
@@ -324,7 +326,7 @@ void TrtDetector::getOutputNames()
             outputNames.emplace_back(name);
             outputTypes[name] = engine->getTensorDataType(name);
 
-            if (configVerbose())
+            if (config.verbose)
             {
                 std::cout << "[Detector] Detected output: " << name << std::endl;
             }
@@ -357,7 +359,7 @@ void TrtDetector::getBindings()
             if (err == cudaSuccess)
             {
                 inputBindings[name] = ptr;
-                if (configVerbose())
+                if (config.verbose)
                 {
                     std::cout << "[Detector] Allocated " << size << " bytes for input " << name << std::endl;
                 }
@@ -378,7 +380,7 @@ void TrtDetector::getBindings()
             if (err == cudaSuccess)
             {
                 outputBindings[name] = ptr;
-                if (configVerbose())
+                if (config.verbose)
                 {
                     std::cout << "[Detector] Allocated " << size << " bytes for output " << name << std::endl;
                 }
@@ -393,16 +395,6 @@ void TrtDetector::getBindings()
 
 void TrtDetector::initialize(const std::string& modelFile)
 {
-    int detectionResolution = 0;
-    bool useCudaGraphSetting = false;
-    bool verbose = false;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        detectionResolution = config.detection_resolution;
-        useCudaGraphSetting = config.use_cuda_graph;
-        verbose = config.verbose;
-    }
-
     runtime.reset(nvinfer1::createInferRuntime(gLogger));
     loadEngine(modelFile);
     if (!engine)
@@ -432,21 +424,14 @@ void TrtDetector::initialize(const std::string& modelFile)
     for (int i = 0; i < inputDims.nbDims; ++i)
         if (inputDims.d[i] <= 0) isStatic = false;
 
-    bool shouldUpdateFixedInput = false;
+    if (isStatic != config.fixed_input_size)
     {
-        std::lock_guard<std::mutex> lock(configMutex);
-        shouldUpdateFixedInput = (isStatic != config.fixed_input_size);
-        if (shouldUpdateFixedInput)
-            config.fixed_input_size = isStatic;
-    }
-
-    if (shouldUpdateFixedInput)
-    {
+        config.fixed_input_size = isStatic;
         detector_model_changed.store(true);
         std::cout << "[Detector] Automatically set fixed_input_size = " << (isStatic ? "true" : "false") << std::endl;
     }
 
-    const int target = detectionResolution;
+    const int target = config.detection_resolution;
     if (!isStatic)
     {
         nvinfer1::Dims4 newShape{ 1, 3, target, target };
@@ -512,25 +497,16 @@ void TrtDetector::initialize(const std::string& modelFile)
         return;
     }
 
-    // Pre-allocate GPU buffers
+    img_scale = static_cast<float>(config.detection_resolution) / w;
+
     gpuResizedBuffer.create(h, w, CV_8UC3);
     gpuFloatBuffer.create(h, w, CV_32FC3);
-    gpuChannelBuffers.resize(c);
-    for (int i = 0; i < c; ++i)
-        gpuChannelBuffers[i].create(h, w, CV_32F);
-
     cvStream = cv::cuda::StreamAccessor::wrapStream(stream);
 
-    img_scale_x = static_cast<float>(detectionResolution) / w;
-    img_scale_y = static_cast<float>(detectionResolution) / h;
-    img_scale = img_scale_x;
-
-    resizedBuffer.create(h, w, CV_8UC3);
-    floatBuffer.create(h, w, CV_32FC3);
-    channelBuffers.clear();
-    channelBuffers.resize(c);
-    for (int i = 0; i < c; ++i)
-        channelBuffers[i].create(h, w, CV_32F);
+    cpuResizedBuffer.create(h, w, CV_8UC3);
+    cpuRgbBuffer.create(h, w, CV_8UC3);
+    cpuFloatBuffer.create(h, w, CV_32FC3);
+    inputHostBuffer.resize(static_cast<size_t>(c) * static_cast<size_t>(h) * static_cast<size_t>(w));
 
     for (const auto& n : inputNames)
         context->setTensorAddress(n.c_str(), inputBindings[n]);
@@ -552,17 +528,16 @@ void TrtDetector::initialize(const std::string& modelFile)
     cudaEventCreate(&inferenceCompleteEvent);
     cudaEventCreate(&copyCompleteEvent);
 
-    useCudaGraph = useCudaGraphSetting;
+    useCudaGraph = config.use_cuda_graph;
     if (useCudaGraph)
     {
         captureCudaGraph();
     }
 
-    if (verbose)
+    if (config.verbose)
     {
         std::cout << "[Detector] Initialized. ModelStatic=" << std::boolalpha << isStatic
-            << ", NetInput=" << h << "x" << w
-            << " (scaleX=" << img_scale_x << ", scaleY=" << img_scale_y << ")" << std::endl;
+            << ", NetInput=" << h << "x" << w << " (scale=" << img_scale << ")" << std::endl;
     }
 }
 
@@ -620,11 +595,8 @@ void TrtDetector::loadEngine(const std::string& modelFile)
                         engineFile.write(reinterpret_cast<const char*>(serializedEngine->data()), serializedEngine->size());
                         engineFile.close();
 
-                        {
-                            std::lock_guard<std::mutex> lock(configMutex);
-                            config.ai_model = std::filesystem::path(engineFilePath).filename().string();
-                            config.saveConfig("config.ini");
-                        }
+                        config.ai_model = std::filesystem::path(engineFilePath).filename().string();
+                        config.saveConfig("config.ini");
 
                         std::cout << "[Detector] Engine saved to: " << engineFilePath << std::endl;
                     }
@@ -649,10 +621,7 @@ void TrtDetector::processFrame(
     const cv::Mat& source_frame,
     std::chrono::steady_clock::time_point frameTimestamp)
 {
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        if (config.backend == "DML") return;
-    }
+    if (config.backend == "DML") return;
 
     if (detectionPaused)
     {
@@ -676,10 +645,7 @@ void TrtDetector::processFrameGpu(
     const cv::cuda::GpuMat& frame,
     std::chrono::steady_clock::time_point frameTimestamp)
 {
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        if (config.backend == "DML") return;
-    }
+    if (config.backend == "DML") return;
 
     if (detectionPaused)
     {
@@ -701,16 +667,10 @@ void TrtDetector::processFrameGpu(
 
 void TrtDetector::inferenceThread()
 {
-    while (!shouldExit && !::shouldExit)
+    while (!shouldExit)
     {
         if (detector_model_changed.load())
         {
-            std::string aiModel;
-            {
-                std::lock_guard<std::mutex> cfgLock(configMutex);
-                aiModel = config.ai_model;
-            }
-
             {
                 std::unique_lock<std::mutex> lock(inferenceMutex);
                 destroyCudaGraph();
@@ -732,20 +692,14 @@ void TrtDetector::inferenceThread()
                 frameReady = false;
                 pendingFrameType = PendingFrameType::None;
             }
-            initialize("models/" + aiModel);
+            initialize("models/" + config.ai_model);
             detection_resolution_changed.store(true);
             detector_model_changed.store(false);
         }
 
-        bool useCudaGraphSetting = false;
+        if (useCudaGraph != config.use_cuda_graph)
         {
-            std::lock_guard<std::mutex> cfgLock(configMutex);
-            useCudaGraphSetting = config.use_cuda_graph;
-        }
-
-        if (useCudaGraph != useCudaGraphSetting)
-        {
-            useCudaGraph = useCudaGraphSetting;
+            useCudaGraph = config.use_cuda_graph;
             if (!useCudaGraph)
             {
                 destroyCudaGraph();
@@ -765,17 +719,17 @@ void TrtDetector::inferenceThread()
 
         {
             std::unique_lock<std::mutex> lock(inferenceMutex);
-            if (!frameReady && !shouldExit && !::shouldExit)
-                inferenceCV.wait(lock, [this] { return frameReady || shouldExit || ::shouldExit; });
+            if (!frameReady && !shouldExit)
+                inferenceCV.wait(lock, [this] { return frameReady || shouldExit; });
 
-            if (shouldExit || ::shouldExit) break;
+            if (shouldExit) break;
 
             if (frameReady)
+            {
+                frameType = pendingFrameType;
+                frameTimestamp = currentFrameTimestamp;
+                if (frameType == PendingFrameType::Gpu)
                 {
-                    frameType = pendingFrameType;
-                    frameTimestamp = currentFrameTimestamp;
-                    if (frameType == PendingFrameType::Gpu)
-                    {
                     frameGpu = currentFrameGpu;
                     currentFrameGpu.release();
                     currentFrame.release();
@@ -903,40 +857,32 @@ void TrtDetector::inferenceThread()
                     confidences.push_back(det.confidence);
                 }
 
-                detectionBuffer.set(boxes, classes, frameTimestamp);
-
-                std::string aiModel;
-                Config configSnapshot;
-                {
-                    std::lock_guard<std::mutex> cfgLock(configMutex);
-                    aiModel = config.ai_model;
-                    configSnapshot = config;
-                }
+                detectionBuffer.set(boxes, classes, confidences, frameTimestamp);
 
                 if (hasGpuFrame)
                 {
                     cvm::MaybeCollectDataSample(
                         "",
-                        aiModel.c_str(),
+                        config.ai_model.c_str(),
                         frameGpu,
                         boxes,
                         classes,
                         confidences,
                         aiming.load(),
-                        configSnapshot);
+                        config);
                 }
                 else
                 {
                     const cv::Mat& frameForCollection = sourceFrame.empty() ? frame : sourceFrame;
                     cvm::MaybeCollectDataSample(
                         "",
-                        aiModel.c_str(),
+                        config.ai_model.c_str(),
                         frameForCollection,
                         boxes,
                         classes,
                         confidences,
                         aiming.load(),
-                        configSnapshot);
+                        config);
                 }
 
                 auto t_post_end = std::chrono::steady_clock::now();
@@ -967,8 +913,47 @@ void TrtDetector::preProcess(const cv::Mat& frame)
     if (frame.empty())
         return;
 
-    gpuFrameBuffer.upload(frame, cvStream);
-    preProcess(gpuFrameBuffer);
+    void* inputBuffer = inputBindings[inputName];
+    if (!inputBuffer)
+        return;
+
+    nvinfer1::Dims dims = context->getTensorShape(inputName.c_str());
+    int c = 0;
+    int h = 0;
+    int w = 0;
+    if (!tryGetPositiveDimInt(dims.d[1], &c)
+        || !tryGetPositiveDimInt(dims.d[2], &h)
+        || !tryGetPositiveDimInt(dims.d[3], &w))
+    {
+        return;
+    }
+
+    if (c != 3)
+        return;
+
+    cv::Mat bgrFrame;
+    switch (frame.channels())
+    {
+    case 4:
+        cv::cvtColor(frame, cpuBgrBuffer, cv::COLOR_BGRA2BGR);
+        bgrFrame = cpuBgrBuffer;
+        break;
+    case 1:
+        cv::cvtColor(frame, cpuBgrBuffer, cv::COLOR_GRAY2BGR);
+        bgrFrame = cpuBgrBuffer;
+        break;
+    case 3:
+        bgrFrame = frame;
+        break;
+    default:
+        return;
+    }
+
+    cv::resize(bgrFrame, cpuResizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR);
+    cv::cvtColor(cpuResizedBuffer, cpuRgbBuffer, cv::COLOR_BGR2RGB);
+    cpuRgbBuffer.convertTo(cpuFloatBuffer, CV_32FC3, 1.0f / 255.0f);
+
+    copyCpuTensorToDevice(cpuFloatBuffer, w, h, inputBuffer);
 }
 
 void TrtDetector::preProcess(const cv::cuda::GpuMat& frame)
@@ -995,27 +980,24 @@ void TrtDetector::preProcess(const cv::cuda::GpuMat& frame)
         return;
 
     cv::cuda::GpuMat bgrFrame;
-    if (frame.channels() == 4)
+    switch (frame.channels())
     {
+    case 4:
         cv::cuda::cvtColor(frame, gpuFrameBuffer, cv::COLOR_BGRA2BGR, 0, cvStream);
         bgrFrame = gpuFrameBuffer;
-    }
-    else if (frame.channels() == 1)
-    {
+        break;
+    case 1:
         cv::cuda::cvtColor(frame, gpuFrameBuffer, cv::COLOR_GRAY2BGR, 0, cvStream);
         bgrFrame = gpuFrameBuffer;
-    }
-    else if (frame.channels() == 3)
-    {
+        break;
+    case 3:
         bgrFrame = frame;
-    }
-    else
-    {
+        break;
+    default:
         return;
     }
 
     cv::cuda::resize(bgrFrame, gpuResizedBuffer, cv::Size(w, h), 0, 0, cv::INTER_LINEAR, cvStream);
-
     gpuResizedBuffer.convertTo(gpuFloatBuffer, CV_32FC3, 1.0 / 255.0, 0.0, cvStream);
 
     launch_hwc_to_chw_norm(
@@ -1026,19 +1008,50 @@ void TrtDetector::preProcess(const cv::cuda::GpuMat& frame)
         h,
         stream);
 
-    bool verbose = false;
+    if (config.verbose)
     {
-        std::lock_guard<std::mutex> lock(configMutex);
-        verbose = config.verbose;
-    }
-
-    if (verbose)
-    {
-        auto err = cudaGetLastError();
+        const cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess)
         {
             std::cerr << "[Detector] preprocess kernel launch error: " << cudaGetErrorString(err) << std::endl;
         }
+    }
+}
+
+void TrtDetector::copyCpuTensorToDevice(const cv::Mat& rgbFloatFrame, int width, int height, void* inputBuffer)
+{
+    if (rgbFloatFrame.empty() || rgbFloatFrame.channels() != 3 || !inputBuffer)
+        return;
+
+    const size_t channelSize = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t tensorSize = channelSize * 3;
+    if (inputHostBuffer.size() != tensorSize)
+        inputHostBuffer.resize(tensorSize);
+
+    float* dst = inputHostBuffer.data();
+    for (int y = 0; y < height; ++y)
+    {
+        const cv::Vec3f* row = rgbFloatFrame.ptr<cv::Vec3f>(y);
+        const size_t rowOffset = static_cast<size_t>(y) * static_cast<size_t>(width);
+        for (int x = 0; x < width; ++x)
+        {
+            const size_t idx = rowOffset + static_cast<size_t>(x);
+            const cv::Vec3f& pixel = row[x];
+            dst[idx] = pixel[0];
+            dst[channelSize + idx] = pixel[1];
+            dst[channelSize * 2 + idx] = pixel[2];
+        }
+    }
+
+    cudaError_t err = cudaMemcpyAsync(
+        inputBuffer,
+        inputHostBuffer.data(),
+        tensorSize * sizeof(float),
+        cudaMemcpyHostToDevice,
+        stream);
+    if (err != cudaSuccess)
+    {
+        std::cerr << "[Detector] preprocess input copy failed: " << cudaGetErrorString(err) << std::endl;
     }
 }
 
@@ -1052,23 +1065,17 @@ std::vector<Detection> TrtDetector::postProcess(const float* output, const std::
         return {};
 
     std::vector<Detection> detections;
-    float confThreshold = 0.0f;
-    float nmsThreshold = 0.0f;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        confThreshold = config.confidence_threshold;
-        nmsThreshold = config.nms_threshold;
-    }
     
     detections = postProcessYolo(
         output,
         shapeIt->second,
         numClasses,
-        confThreshold,
-        nmsThreshold,
+        config.confidence_threshold,
+        config.nms_threshold,
         nmsTime
     );
     filterDetectionsByDepthMask(detections);
+    filterDetectionsByCircleFov(detections);
     return detections;
 }
 #endif

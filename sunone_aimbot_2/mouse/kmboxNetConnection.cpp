@@ -7,7 +7,7 @@
 #include <sunone_aimbot_2.h>
 
 KmboxNetConnection::KmboxNetConnection(const std::string& ip, const std::string& port, const std::string& uuid)
-    : ip_(ip), port_(port), uuid_(uuid)
+    : is_open_(false), ip_(ip), port_(port), uuid_(uuid), monitor_(false)
 {
     int ret = kmNet_init((char*)ip.c_str(), (char*)port.c_str(), (char*)uuid.c_str());
     is_open_ = (ret == 0);
@@ -25,7 +25,6 @@ KmboxNetConnection::KmboxNetConnection(const std::string& ip, const std::string&
     if (monitor_thread_.joinable())
         monitor_thread_.join();
 
-    monitor_running_ = true;
     monitor_thread_ = std::thread(&KmboxNetConnection::monitorThread, this);
 }
 
@@ -33,12 +32,7 @@ void KmboxNetConnection::monitorThread()
 {
     try
     {
-        int ret = kmNet_monitor(10000);
-        if (ret != 0)
-        {
-            std::cerr << "[KmboxNet] Monitor start failed, ret=" << ret << std::endl;
-            return;
-        }
+        kmNet_monitor(10000);
 
         while (monitor_running_)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -58,11 +52,8 @@ KmboxNetConnection::~KmboxNetConnection()
     monitor_running_ = false;
     if (monitor_thread_.joinable())
         monitor_thread_.join();
-    if (is_open_)
-    {
-        kmNet_monitor(0);
-        kmNet_close();
-    }
+    kmNet_monitor(0);
+    WSACleanup();
 }
 
 void KmboxNetConnection::move(int x, int y)

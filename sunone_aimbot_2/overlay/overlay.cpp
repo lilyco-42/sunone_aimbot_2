@@ -329,6 +329,7 @@ static const OverlayTabItem kOverlayTabs[] = {
     { "Target",        "Core",    "Target selection and aim point offsets.",             draw_target },
     { "Mouse",         "Core",    "Mouse behavior, input backend and motion profile.",   draw_mouse },
     { "AI",            "Core",    "Model and detector thresholds.",                      draw_ai },
+    { "Neural",        "Core",    "Optional learned target association.",                draw_neural },
     { "Buttons",       "Control", "Hotkeys for features and runtime actions.",           draw_buttons },
     { "Overlay",       "Control", "Editor appearance and privacy options.",              draw_overlay },
     { "Game Overlay",  "Control", "In-game render visuals and simulation options.",      draw_game_overlay_settings },
@@ -890,10 +891,7 @@ void OverlayThread()
             }
             else
             {
-                {
-                    std::lock_guard<std::mutex> lock(configMutex);
-                    OverlayConfig_SaveNow();
-                }
+                OverlayConfig_SaveNow();
                 ShowWindow(g_hwnd, SW_HIDE);
             }
 
@@ -1013,11 +1011,7 @@ void OverlayThread()
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        OverlayConfig_SaveNow();
-    }
-
+    OverlayConfig_SaveNow();
     release_body_texture();
 
     ImGui_ImplDX11_Shutdown();

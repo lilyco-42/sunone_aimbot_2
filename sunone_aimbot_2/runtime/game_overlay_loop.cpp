@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "capture.h"
+#include "capture/circle_fov.h"
 #include "Game_overlay.h"
 #include "mouse.h"
 #include "other_tools.h"
@@ -36,6 +37,56 @@ namespace
 std::string g_lastIconPath;
 int g_iconImageId = 0;
 std::mutex g_iconMutex;
+
+struct GameOverlayMonitorBounds
+{
+    RECT rect{};
+    int width = 1;
+    int height = 1;
+};
+
+bool sameGameOverlayMonitorRect(const RECT& a, const RECT& b)
+{
+    return a.left == b.left &&
+        a.top == b.top &&
+        a.right == b.right &&
+        a.bottom == b.bottom;
+}
+
+GameOverlayMonitorBounds resolveGameOverlayMonitorBounds(int overlayMonitorIndex)
+{
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+
+    HMONITOR hTargetMonitor = GetMonitorHandleByIndex(overlayMonitorIndex);
+    if (!hTargetMonitor)
+        hTargetMonitor = MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+
+    GameOverlayMonitorBounds bounds{};
+    if (hTargetMonitor && GetMonitorInfo(hTargetMonitor, &mi))
+    {
+        bounds.rect = mi.rcMonitor;
+    }
+    else
+    {
+        bounds.rect.left = 0;
+        bounds.rect.top = 0;
+        bounds.rect.right = GetSystemMetrics(SM_CXSCREEN);
+        bounds.rect.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+
+    bounds.width = std::max(1, static_cast<int>(bounds.rect.right - bounds.rect.left));
+    bounds.height = std::max(1, static_cast<int>(bounds.rect.bottom - bounds.rect.top));
+    return bounds;
+}
+
+void resetGameOverlayIconCache()
+{
+    std::lock_guard<std::mutex> lk(g_iconMutex);
+    g_lastIconPath.clear();
+    g_iconImageId = 0;
+    g_iconLastError.clear();
+}
 }
 static void draw_target_correction_demo_game_overlay(Game_overlay* overlay, float centerX, float centerY)
 {
@@ -1010,20 +1061,6 @@ static void draw_aim_sim_panel(
 
 void gameOverlayRenderLoop()
 {
-    const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-
-    MONITORINFO mi{};
-    mi.cbSize = sizeof(mi);
-    HMONITOR hPrimary = MonitorFromPoint(POINT{ 0,0 }, MONITOR_DEFAULTTOPRIMARY);
-    GetMonitorInfo(hPrimary, &mi);
-    RECT pr = mi.rcMonitor;
-    const int pw = pr.right - pr.left;
-    const int ph = pr.bottom - pr.top;
-
-    const int offX = pr.left - vx;
-    const int offY = pr.top - vy;
-
 #ifdef USE_CUDA
     static depth_anything::DepthAnythingTrt depthDebugModel;
     static std::string depthDebugModelPath;
@@ -1036,21 +1073,22 @@ void gameOverlayRenderLoop()
 #endif
     int lastDetectionVersion = -1;
     static AimSimulationState aimSimState;
+    int lastOverlayMonitorIndex = 0;
+    RECT lastOverlayMonitorRect{};
+    bool lastOverlayMonitorStateValid = false;
 
     while (!gameOverlayShouldExit.load())
     {
         if (!config.game_overlay_enabled)
         {
+            lastOverlayMonitorStateValid = false;
             aimSimState.initialized = false;
             if (gameOverlayPtr)
             {
                 gameOverlayPtr->Stop();
                 delete gameOverlayPtr;
                 gameOverlayPtr = nullptr;
-                std::lock_guard<std::mutex> lk(g_iconMutex);
-                g_lastIconPath.clear();
-                g_iconImageId = 0;
-                g_iconLastError.clear();
+                resetGameOverlayIconCache();
             }
 #ifdef USE_CUDA
             depthDebugModel.reset();
@@ -1065,17 +1103,44 @@ void gameOverlayRenderLoop()
             continue;
         }
 
+        int overlayMonitorIndex = 0;
+        {
+            std::lock_guard<std::mutex> cfgLock(configMutex);
+            overlayMonitorIndex = config.monitor_idx;
+        }
+
+        const GameOverlayMonitorBounds overlayBounds = resolveGameOverlayMonitorBounds(overlayMonitorIndex);
+        RECT pr = overlayBounds.rect;
+        const int pw = overlayBounds.width;
+        const int ph = overlayBounds.height;
+        const bool overlayMonitorChanged = lastOverlayMonitorStateValid &&
+            (overlayMonitorIndex != lastOverlayMonitorIndex ||
+                !sameGameOverlayMonitorRect(lastOverlayMonitorRect, pr));
+
+        if (overlayMonitorChanged && gameOverlayPtr)
+        {
+            aimSimState.initialized = false;
+            gameOverlayPtr->Stop();
+            delete gameOverlayPtr;
+            gameOverlayPtr = nullptr;
+            resetGameOverlayIconCache();
+        }
+
+        lastOverlayMonitorIndex = overlayMonitorIndex;
+        lastOverlayMonitorRect = pr;
+        lastOverlayMonitorStateValid = true;
+
         if (!gameOverlayPtr)
         {
             gameOverlayPtr = new Game_overlay();
-            gameOverlayPtr->SetWindowBounds(0, 0, pw, ph);
+            gameOverlayPtr->SetWindowBounds(pr.left, pr.top, pw, ph);
             gameOverlayPtr->SetMaxFPS(config.game_overlay_max_fps > 0 ? (unsigned)config.game_overlay_max_fps : 0);
             gameOverlayPtr->SetExcludeFromCapture(config.overlay_exclude_from_capture);
             gameOverlayPtr->Start();
         }
         else if (!gameOverlayPtr->IsRunning())
         {
-            gameOverlayPtr->SetWindowBounds(0, 0, pw, ph);
+            gameOverlayPtr->SetWindowBounds(pr.left, pr.top, pw, ph);
             gameOverlayPtr->SetMaxFPS(config.game_overlay_max_fps > 0 ? (unsigned)config.game_overlay_max_fps : 0);
             gameOverlayPtr->SetExcludeFromCapture(config.overlay_exclude_from_capture);
             gameOverlayPtr->Start();
@@ -1144,23 +1209,8 @@ void gameOverlayRenderLoop()
         }
 
         const auto overlayNow = std::chrono::steady_clock::now();
-        double detectionAgeSec = 0.0;
-        if (detectionTimestamp.time_since_epoch().count() != 0)
-        {
-            detectionAgeSec = std::chrono::duration<double>(overlayNow - detectionTimestamp).count();
-            if (!std::isfinite(detectionAgeSec) || detectionAgeSec < 0.0)
-                detectionAgeSec = 0.0;
-            detectionAgeSec = std::clamp(detectionAgeSec, 0.0, 0.35);
-        }
-
-        std::pair<double, double> cameraCompensation{ 0.0, 0.0 };
-        if (config.game_overlay_compensate_latency && globalMouseThread &&
-            detectionTimestamp.time_since_epoch().count() != 0)
-        {
-            cameraCompensation = globalMouseThread->getMotionCompensationSince(detectionTimestamp);
-        }
-
-        auto projectDetectionBox = [&](const cv::Rect& b,
+        auto projectDetectionBox = [&](
+            const cv::Rect& b,
             double velocityX = 0.0,
             double velocityY = 0.0,
             std::chrono::steady_clock::time_point lastUpdate = {}) -> std::optional<OverlayRect>
@@ -1168,13 +1218,23 @@ void gameOverlayRenderLoop()
             if (b.width <= 0 || b.height <= 0)
                 return std::nullopt;
 
-            double ageSec = detectionAgeSec;
-            if (lastUpdate.time_since_epoch().count() != 0)
+            const auto compensationTimestamp =
+                (lastUpdate.time_since_epoch().count() != 0) ? lastUpdate : detectionTimestamp;
+
+            double ageSec = 0.0;
+            if (compensationTimestamp.time_since_epoch().count() != 0)
             {
-                ageSec = std::chrono::duration<double>(overlayNow - lastUpdate).count();
+                ageSec = std::chrono::duration<double>(overlayNow - compensationTimestamp).count();
                 if (!std::isfinite(ageSec) || ageSec < 0.0)
                     ageSec = 0.0;
                 ageSec = std::clamp(ageSec, 0.0, 0.35);
+            }
+
+            std::pair<double, double> cameraCompensation{ 0.0, 0.0 };
+            if (config.game_overlay_compensate_latency && globalMouseThread &&
+                compensationTimestamp.time_since_epoch().count() != 0)
+            {
+                cameraCompensation = globalMouseThread->getMotionCompensationSince(compensationTimestamp);
             }
 
             double left = static_cast<double>(b.x) + velocityX * ageSec - cameraCompensation.first;
@@ -1591,22 +1651,38 @@ void gameOverlayRenderLoop()
             float thickness = config.game_overlay_frame_thickness;
             if (thickness <= 0.f) thickness = 1.f;
 
-            if (config.circle_mask)
-            {
-                float cx = baseX + regionW * 0.5f;
-                float cy = baseY + regionH * 0.5f;
-                float radius = std::min(regionW, regionH) * 0.5f;
-                gameOverlayPtr->AddCircle({ cx, cy, radius }, col, thickness);
-            }
-            else
-            {
-                gameOverlayPtr->AddRect(
-                    { static_cast<float>(baseX),
-                      static_cast<float>(baseY),
-                      static_cast<float>(regionW),
-                      static_cast<float>(regionH) },
-                    col, thickness);
-            }
+            gameOverlayPtr->AddRect(
+                { static_cast<float>(baseX),
+                  static_cast<float>(baseY),
+                  static_cast<float>(regionW),
+                  static_cast<float>(regionH) },
+                col, thickness);
+        }
+
+        if (config.circle_fov_enabled && config.game_overlay_draw_circle_fov)
+        {
+            int A = config.game_overlay_frame_a;
+            int R = config.game_overlay_frame_r;
+            int G = config.game_overlay_frame_g;
+            int B = config.game_overlay_frame_b;
+            auto clamp255 = [](int& v) { if (v < 0) v = 0; else if (v > 255) v = 255; };
+            clamp255(A); clamp255(R); clamp255(G); clamp255(B);
+            const uint32_t col =
+                (uint32_t(A) << 24) |
+                (uint32_t(R) << 16) |
+                (uint32_t(G) << 8) |
+                uint32_t(B);
+
+            float thickness = config.game_overlay_frame_thickness;
+            if (thickness <= 0.f) thickness = 1.f;
+
+            const cv::Size regionSize(regionW, regionH);
+            const cv::Point2f center = getCircleFovCenter(regionSize);
+            const float radius = getCircleFovRadiusPixels(regionSize, config.circle_fov_radius_percent);
+            gameOverlayPtr->AddCircle(
+                { static_cast<float>(baseX) + center.x, static_cast<float>(baseY) + center.y, radius },
+                col,
+                thickness);
         }
 
         // BOXES
@@ -1666,6 +1742,15 @@ void gameOverlayRenderLoop()
                     label += L" *";
                 if (!t.observedThisFrame)
                     label += L" m" + std::to_wstring(t.missedFrames);
+                if (config.neural_tracker_debug_enabled)
+                {
+                    wchar_t neuralLabel[64] = {};
+                    if (t.lastNeuralEvaluated)
+                        swprintf_s(neuralLabel, L" n%.2f b%.2f", t.lastNeuralScore, t.lastNeuralBonus);
+                    else
+                        swprintf_s(neuralLabel, L" c%.2f", static_cast<double>(t.confidence));
+                    label += neuralLabel;
+                }
 
                 const uint32_t textCol =
                     (t.trackId == lockedTrackId || t.isLocked)

@@ -2,30 +2,26 @@
 #include <winsock2.h>
 #include <Windows.h>
 
-#include <algorithm>
 #include <chrono>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "capture.h"
 #include "mouse.h"
 #include "sunone_aimbot_2.h"
+#include "ghub.h"
+
+extern GhubMouse* gHub;
 #include "runtime/thread_loops.h"
 
 void createInputDevices();
 void assignInputDevices();
 void handleEasyNoRecoil(MouseThread& mouseThread)
 {
-    bool easyNoRecoil = false;
-    int recoil_compensation = 0;
+    if (config.easynorecoil && shooting.load() && zooming.load())
     {
-        std::lock_guard<std::mutex> cfgLock(configMutex);
-        easyNoRecoil = config.easynorecoil;
-        recoil_compensation = static_cast<int>(config.easynorecoilstrength);
-    }
-
-    if (easyNoRecoil && shooting.load() && zooming.load())
-    {
+        int recoil_compensation = static_cast<int>(config.easynorecoilstrength);
         mouseThread.moveRelative(0, recoil_compensation);
     }
 }
@@ -35,45 +31,16 @@ void mouseThreadFunction(MouseThread& mouseThread)
     int lastVersion = -1;
     std::vector<cv::Rect> boxes;
     std::vector<int> classes;
+    std::vector<float> confidences;
     std::chrono::steady_clock::time_point detectionTimestamp{};
     MultiTargetTracker targetTracker;
     std::optional<AimbotTarget> activeTarget;
-    int activeTrackId = -1;
-    bool activeTargetObserved = false;
-    bool wasAiming = false;
     auto lastTrackerUpdate = std::chrono::steady_clock::time_point::min();
-
-    auto resetActiveTarget = [&]() {
-        activeTarget.reset();
-        activeTrackId = -1;
-        activeTargetObserved = false;
-        mouseThread.clearFuturePositions();
-        mouseThread.resetPrediction();
-    };
 
     while (!shouldExit)
     {
         bool hasNewDetection = false;
         bool hasAimObservation = false;
-        int detectionResolution = 0;
-        bool disableHeadshot = false;
-        int predictionFuturePositions = 0;
-        bool autoShoot = false;
-
-        {
-            std::lock_guard<std::mutex> cfgLock(configMutex);
-            detectionResolution = config.detection_resolution;
-            disableHeadshot = config.disable_headshot;
-            predictionFuturePositions = config.prediction_futurePositions;
-            autoShoot = config.auto_shoot;
-        }
-
-        const bool aimingNow = aiming.load();
-        if (aimingNow != wasAiming)
-        {
-            resetActiveTarget();
-            wasAiming = aimingNow;
-        }
 
         {
             std::unique_lock<std::mutex> lock(detectionBuffer.mutex);
@@ -88,6 +55,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
             {
                 boxes = detectionBuffer.boxes;
                 classes = detectionBuffer.classes;
+                confidences = detectionBuffer.confidences;
                 detectionTimestamp = detectionBuffer.frameTimestamp;
                 lastVersion = detectionBuffer.version;
                 hasNewDetection = true;
@@ -122,7 +90,6 @@ void mouseThreadFunction(MouseThread& mouseThread)
                 g_trackerDebugTracks.clear();
                 g_trackerLockedId = -1;
             }
-            resetActiveTarget();
             detection_resolution_changed.store(false);
         }
 
@@ -131,10 +98,11 @@ void mouseThreadFunction(MouseThread& mouseThread)
             targetTracker.update(
                 boxes,
                 classes,
-                detectionResolution,
-                detectionResolution,
-                disableHeadshot,
-                aimingNow,
+                confidences,
+                config.detection_resolution,
+                config.detection_resolution,
+                config.disable_headshot,
+                aiming.load(),
                 detectionTimestamp
             );
             lastTrackerUpdate = std::chrono::steady_clock::now();
@@ -145,35 +113,26 @@ void mouseThreadFunction(MouseThread& mouseThread)
             }
 
             LockedTargetInfo lockInfo;
-            if (targetTracker.getLockedTarget(lockInfo))
+            if (targetTracker.getLockedTarget(lockInfo) && lockInfo.observedThisFrame)
             {
-                if (activeTrackId != -1 && activeTrackId != lockInfo.trackId)
-                {
-                    mouseThread.resetPrediction();
-                    mouseThread.clearFuturePositions();
-                }
-
                 activeTarget = lockInfo.target;
-                activeTrackId = lockInfo.trackId;
-                activeTargetObserved = lockInfo.observedThisFrame;
+                hasAimObservation = true;
+                mouseThread.setLastTargetTime(std::chrono::steady_clock::now());
                 mouseThread.setTargetDetected(true);
 
-                if (lockInfo.observedThisFrame)
-                {
-                    hasAimObservation = true;
-                    mouseThread.setLastTargetTime(std::chrono::steady_clock::now());
-
-                    auto futurePositions = mouseThread.predictFuturePositions(
-                        activeTarget->pivotX,
-                        activeTarget->pivotY,
-                        predictionFuturePositions
-                    );
-                    mouseThread.storeFuturePositions(futurePositions);
-                }
+                auto futurePositions = mouseThread.predictFuturePositions(
+                    activeTarget->pivotX,
+                    activeTarget->pivotY,
+                    config.prediction_futurePositions
+                );
+                mouseThread.storeFuturePositions(futurePositions);
             }
             else
             {
-                resetActiveTarget();
+                activeTarget.reset();
+                mouseThread.clearFuturePositions();
+                mouseThread.setTargetDetected(false);
+                mouseThread.clearQueuedMoves();
             }
         }
 
@@ -183,29 +142,32 @@ void mouseThreadFunction(MouseThread& mouseThread)
             const int staleMs = std::clamp(2000 / fps, 25, 180);
             if (std::chrono::steady_clock::now() - lastTrackerUpdate > std::chrono::milliseconds(staleMs))
             {
-                resetActiveTarget();
+                activeTarget.reset();
+                mouseThread.clearFuturePositions();
+                mouseThread.setTargetDetected(false);
+                mouseThread.clearQueuedMoves();
             }
         }
 
-        if (aimingNow)
+        if (aiming)
         {
             if (activeTarget && hasAimObservation)
             {
                 mouseThread.moveMousePivot(activeTarget->pivotX, activeTarget->pivotY, detectionTimestamp);
 
-                if (autoShoot)
+                if (config.auto_shoot)
                 {
                     mouseThread.pressMouse(*activeTarget);
                 }
             }
             else
             {
-                if (!activeTarget || !activeTargetObserved)
+                if (!activeTarget)
                 {
                     mouseThread.clearQueuedMoves();
                 }
 
-                if (autoShoot)
+                if (config.auto_shoot)
                 {
                     mouseThread.releaseMouse();
                 }
@@ -214,7 +176,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
         else
         {
             mouseThread.clearQueuedMoves();
-            if (autoShoot)
+            if (config.auto_shoot)
             {
                 mouseThread.releaseMouse();
             }

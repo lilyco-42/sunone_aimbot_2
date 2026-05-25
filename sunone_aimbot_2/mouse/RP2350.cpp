@@ -80,7 +80,6 @@ void RP2350::write(const std::string& data)
     catch (...)
     {
         is_open_ = false;
-        listening_ = false;
     }
 }
 
@@ -96,7 +95,6 @@ std::string RP2350::read()
     catch (...)
     {
         is_open_ = false;
-        listening_ = false;
     }
 
     return std::string();
@@ -247,13 +245,12 @@ void RP2350::processIncomingLine(const std::string& line)
             shooting.store(pressed);
             break;
         case 2:
+            aiming_active.store(pressed);
+            aiming.store(pressed);
+            break;
         case 3:
             zooming_active.store(pressed);
             zooming.store(pressed);
-            break;
-        case 5:
-            aiming_active.store(pressed);
-            aiming.store(pressed);
             break;
         }
     }

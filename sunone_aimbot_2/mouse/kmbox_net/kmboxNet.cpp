@@ -1,5 +1,10 @@
 ﻿#include <time.h>
 
+#include <atomic>
+#include <cctype>
+#include <cstring>
+#include <mutex>
+
 #include "kmbox_net/kmboxNet.h"
 #include "kmbox_net/HidTable.h"
 
@@ -12,94 +17,10 @@ client_tx rx;                         // Data to receive
 SOCKADDR_IN addrSrv;
 soft_mouse_t    softmouse;            // Software mouse data
 soft_keyboard_t softkeyboard;         // Software keyboard data
-static int monitor_run = 0;           // Whether physical mouse/keyboard monitoring is running
+static std::atomic<int> monitor_run{ 0 }; // Whether physical mouse/keyboard monitoring is running
 static int mask_keyboard_mouse_flag = 0; // Mouse/keyboard block status
 static short monitor_port = 0;
 
-namespace
-{
-constexpr DWORD kInitialReceiveTimeoutMs = 1000;
-constexpr DWORD kCommandReceiveTimeoutMs = 300;
-constexpr DWORD kMonitorReceiveTimeoutMs = 100;
-
-bool IsSocketValid(SOCKET socket)
-{
-	return socket != 0 && socket != INVALID_SOCKET;
-}
-
-void CloseSocket(SOCKET& socket)
-{
-	if (IsSocketValid(socket))
-		closesocket(socket);
-	socket = 0;
-}
-
-bool SetReceiveTimeout(SOCKET socket, DWORD timeoutMs)
-{
-	return setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_RCVTIMEO,
-		reinterpret_cast<const char*>(&timeoutMs),
-		sizeof(timeoutMs)) != SOCKET_ERROR;
-}
-
-bool SetSendTimeout(SOCKET socket, DWORD timeoutMs)
-{
-	return setsockopt(
-		socket,
-		SOL_SOCKET,
-		SO_SNDTIMEO,
-		reinterpret_cast<const char*>(&timeoutMs),
-		sizeof(timeoutMs)) != SOCKET_ERROR;
-}
-
-bool SetNonBlocking(SOCKET socket)
-{
-	u_long nonBlocking = 1;
-	return ioctlsocket(socket, FIONBIO, &nonBlocking) != SOCKET_ERROR;
-}
-
-int RecvFromWithTimeout(
-	SOCKET socket,
-	char* buffer,
-	int length,
-	int flags,
-	sockaddr* from,
-	int* fromLen,
-	DWORD timeoutMs = kCommandReceiveTimeoutMs)
-{
-	if (!IsSocketValid(socket))
-	{
-		WSASetLastError(WSAENOTSOCK);
-		return SOCKET_ERROR;
-	}
-
-	fd_set readSet;
-	FD_ZERO(&readSet);
-	FD_SET(socket, &readSet);
-
-	timeval timeout{};
-	timeout.tv_sec = static_cast<long>(timeoutMs / 1000);
-	timeout.tv_usec = static_cast<long>((timeoutMs % 1000) * 1000);
-
-	const int ready = select(0, &readSet, nullptr, nullptr, &timeout);
-	if (ready <= 0)
-	{
-		if (ready == 0)
-			WSASetLastError(WSAETIMEDOUT);
-		return SOCKET_ERROR;
-	}
-
-	return ::recvfrom(socket, buffer, length, flags, from, fromLen);
-}
-
-void CleanupClientSocket()
-{
-	CloseSocket(sockClientfd);
-	WSACleanup();
-}
-}
 
 #pragma pack(1)
 typedef struct {
@@ -119,6 +40,17 @@ typedef struct {
 
 standard_mouse_report_t     hw_mouse;     // Hardware mouse message
 standard_keyboard_report_t  hw_keyboard;  // Hardware keyboard message
+
+static std::mutex g_kmNetCommandMutex;
+static std::mutex g_kmNetMonitorMutex;
+
+static void SetSocketReceiveTimeout(SOCKET socketFd, int timeoutMs = 250)
+{
+	if (socketFd == INVALID_SOCKET || socketFd <= 0)
+		return;
+
+	setsockopt(socketFd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+}
 
 // Generate a random number between A and B
 int myrand(int a, int b)
@@ -168,30 +100,21 @@ Return value: 0 means success, non-zero values refer to error codes
 */
 int kmNet_init(char* ip, char* port, char* mac)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
+	if (!ip || !port || !mac || std::strlen(mac) < 8)
+		return err_net_cmd;
+
 	WORD wVersionRequested; WSADATA wsaData; int err;
 	wVersionRequested = MAKEWORD(1, 1);
 	err = WSAStartup(wVersionRequested, &wsaData);
 	if (err != 0)        return err_creat_socket;
 	if (LOBYTE(wsaData.wVersion) != 1 || HIBYTE(wsaData.wVersion) != 1) {
-		WSACleanup();
-		sockClientfd = 0;
+		WSACleanup(); sockClientfd = -1;
 		return err_net_version;
 	}
 	srand((unsigned)time(NULL));
 	sockClientfd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (!IsSocketValid(sockClientfd))
-	{
-		WSACleanup();
-		return err_creat_socket;
-	}
-	if (!SetNonBlocking(sockClientfd) ||
-		!SetReceiveTimeout(sockClientfd, kInitialReceiveTimeoutMs) ||
-		!SetSendTimeout(sockClientfd, kCommandReceiveTimeoutMs))
-	{
-		CleanupClientSocket();
-		return err_creat_socket;
-	}
-	memset(&addrSrv, 0, sizeof(addrSrv));
+	SetSocketReceiveTimeout(sockClientfd);
 	addrSrv.sin_addr.S_un.S_addr = inet_addr(ip);
 	addrSrv.sin_family = AF_INET;
 	addrSrv.sin_port = htons(atoi(port)); // Port UUID[1] >> 16 high 16 bits
@@ -202,34 +125,12 @@ int kmNet_init(char* ip, char* port, char* mac)
 	memset(&softmouse, 0, sizeof(softmouse));       // Clear software mouse data
 	memset(&softkeyboard, 0, sizeof(softkeyboard)); // Clear software keyboard data
 	err = sendto(sockClientfd, (const char*)&tx, sizeof(cmd_head_t), 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
-	if (err == SOCKET_ERROR)
-	{
-		CleanupClientSocket();
-		return err_net_tx;
-	}
 	Sleep(20); // The first connection may take longer
 	int clen = sizeof(addrSrv);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&addrSrv, &clen, kInitialReceiveTimeoutMs);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&addrSrv, &clen);
 	if (err < 0)
-	{
-		CleanupClientSocket();
 		return err_net_rx_timeout;
-	}
-	err = NetRxReturnHandle(&rx, &tx);
-	if (err != success)
-		CleanupClientSocket();
-	else if (!SetReceiveTimeout(sockClientfd, kCommandReceiveTimeoutMs) ||
-		!SetSendTimeout(sockClientfd, kCommandReceiveTimeoutMs))
-	{
-		CleanupClientSocket();
-		return err_creat_socket;
-	}
-	return err;
-}
-
-void kmNet_close()
-{
-	CleanupClientSocket();
+	return NetRxReturnHandle(&rx, &tx);
 }
 
 /*
@@ -239,8 +140,9 @@ Return value: 0 if successful, nonzero means error.
 */
 int kmNet_mouse_move(short x, short y)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;              // Command statistics value
 	tx.head.cmd = cmd_mouse_move;    // Command
 	tx.head.rand = rand();           // Random obfuscation value
@@ -253,7 +155,7 @@ int kmNet_mouse_move(short x, short y)
 	softmouse.y = 0;
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -268,8 +170,9 @@ Return value: 0 if successful, nonzero means error.
 */
 int kmNet_mouse_left(int isdown)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;              // Command statistics value
 	tx.head.cmd = cmd_mouse_left;    // Command
 	tx.head.rand = rand();           // Random obfuscation value
@@ -279,7 +182,7 @@ int kmNet_mouse_left(int isdown)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -292,8 +195,9 @@ Return value: 0 if successful, nonzero means error.
 */
 int kmNet_mouse_middle(int isdown)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;              // Command statistics value
 	tx.head.cmd = cmd_mouse_middle;  // Command
 	tx.head.rand = rand();           // Random obfuscation value
@@ -303,7 +207,7 @@ int kmNet_mouse_middle(int isdown)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -316,8 +220,9 @@ Return value: 0 if successful, nonzero means error.
 */
 int kmNet_mouse_right(int isdown)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;              // Command statistics value
 	tx.head.cmd = cmd_mouse_right;   // Command
 	tx.head.rand = rand();           // Random obfuscation value
@@ -327,7 +232,7 @@ int kmNet_mouse_right(int isdown)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -336,8 +241,9 @@ int kmNet_mouse_right(int isdown)
 // Mouse wheel control
 int kmNet_mouse_wheel(int wheel)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;              // Command statistics value
 	tx.head.cmd = cmd_mouse_wheel;   // Command
 	tx.head.rand = rand();           // Random obfuscation value
@@ -348,7 +254,7 @@ int kmNet_mouse_wheel(int wheel)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -360,8 +266,9 @@ Mouse full report control function
 */
 int kmNet_mouse_all(int button, int x, int y, int wheel)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;              // Command statistics value
 	tx.head.cmd = cmd_mouse_wheel;   // Command
 	tx.head.rand = rand();           // Random obfuscation value
@@ -377,7 +284,7 @@ int kmNet_mouse_all(int button, int x, int y, int wheel)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -395,8 +302,9 @@ Try to imitate human operation. Actual time may be less than 'ms'.
 */
 int kmNet_mouse_move_auto(int x, int y, int ms)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;                  // Command statistics value
 	tx.head.cmd = cmd_mouse_automove;    // Command
 	tx.head.rand = ms;                   // Random obfuscation value (here: movement time in ms)
@@ -409,7 +317,7 @@ int kmNet_mouse_move_auto(int x, int y, int ms)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -425,8 +333,9 @@ x2, y2 : Control point p2 coordinates
 */
 int kmNet_mouse_move_beizer(int x, int y, int ms, int x1, int y1, int x2, int y2)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;               // Command statistics value
 	tx.head.cmd = cmd_bazerMove;      // Command
 	tx.head.rand = ms;                // Random obfuscation value
@@ -443,7 +352,7 @@ int kmNet_mouse_move_beizer(int x, int y, int ms, int x1, int y1, int x2, int y2
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -458,6 +367,7 @@ For regular keys, the function tries to add vk_key to the queue. If the queue is
 */
 int kmNet_keydown(int vk_key)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int i;
 	if (vk_key >= KEY_LEFTCONTROL && vk_key <= KEY_RIGHT_GUI) // Control key
 	{
@@ -490,12 +400,12 @@ int kmNet_keydown(int vk_key)
 			}
 		}
 		// Queue is full, remove the first one
-		memcpy(&softkeyboard.button[0], &softkeyboard.button[1], 10);
+		std::memmove(&softkeyboard.button[0], &softkeyboard.button[1], 9);
 		softkeyboard.button[9] = vk_key;
 	}
 KM_down_send:
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;               // Command statistics value
 	tx.head.cmd = cmd_keyboard_all;   // Command
 	tx.head.rand = rand();            // Random obfuscation value
@@ -504,7 +414,7 @@ KM_down_send:
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -513,6 +423,7 @@ KM_down_send:
 
 int kmNet_keyup(int vk_key)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int i;
 	if (vk_key >= KEY_LEFTCONTROL && vk_key <= KEY_RIGHT_GUI) // Control key
 	{
@@ -534,7 +445,7 @@ int kmNet_keyup(int vk_key)
 		{
 			if (softkeyboard.button[i] == vk_key) // vk_key found in the queue
 			{
-				memcpy(&softkeyboard.button[i], &softkeyboard.button[i + 1], 10 - i);
+				std::memmove(&softkeyboard.button[i], &softkeyboard.button[i + 1], 9 - i);
 				softkeyboard.button[9] = 0;
 				goto KM_up_send;
 			}
@@ -542,7 +453,7 @@ int kmNet_keyup(int vk_key)
 	}
 KM_up_send:
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;               // Command statistics value
 	tx.head.cmd = cmd_keyboard_all;   // Command
 	tx.head.rand = rand();            // Random obfuscation value
@@ -551,7 +462,7 @@ KM_up_send:
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -561,8 +472,9 @@ KM_up_send:
 // Reboot the box
 int kmNet_reboot(void)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;               // Command statistics value
 	tx.head.cmd = cmd_reboot;         // Command
 	tx.head.rand = rand();            // Random obfuscation value
@@ -570,15 +482,12 @@ int kmNet_reboot(void)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	WSACleanup();
+	sockClientfd = -1;
 	if (err < 0)
-	{
-		CleanupClientSocket();
 		return err_net_rx_timeout;
-	}
-	err = NetRxReturnHandle(&rx, &tx);
-	CleanupClientSocket();
-	return err;
+	return NetRxReturnHandle(&rx, &tx);
 
 }
 
@@ -588,59 +497,50 @@ int kmNet_reboot(void)
 DWORD WINAPI ThreadListenProcess(LPVOID lpParameter)
 {
 	WSADATA wsaData; int ret;
-	if (WSAStartup(MAKEWORD(1, 1), &wsaData) != 0)
-		return 0;
+	WSAStartup(MAKEWORD(1, 1), &wsaData);            // Create socket, SOCK_DGRAM specifies UDP protocol
 	sockMonitorfd = socket(AF_INET, SOCK_DGRAM, 0);  // Bind socket
-	if (!IsSocketValid(sockMonitorfd) ||
-		!SetNonBlocking(sockMonitorfd) ||
-		!SetReceiveTimeout(sockMonitorfd, kMonitorReceiveTimeoutMs))
-	{
-		CloseSocket(sockMonitorfd);
-		WSACleanup();
-		return 0;
-	}
+	SetSocketReceiveTimeout(sockMonitorfd);
 	sockaddr_in servAddr;
 	memset(&servAddr, 0, sizeof(servAddr));          // Fill every byte with 0
 	servAddr.sin_family = PF_INET;                   // Use IPv4 address
 	servAddr.sin_addr.s_addr = INADDR_ANY;           // Automatically obtain IP address
 	servAddr.sin_port = htons(monitor_port);         // Listening port
 	ret = bind(sockMonitorfd, (SOCKADDR*)&servAddr, sizeof(SOCKADDR));
-	if (ret == SOCKET_ERROR)
-	{
-		CloseSocket(sockMonitorfd);
-		WSACleanup();
-		return 0;
-	}
 	SOCKADDR cliAddr;  // Client address info
 	int nSize = sizeof(SOCKADDR);
 	char buff[1024];   // Buffer
-	monitor_run = monitor_ok;
-	while (IsSocketValid(sockMonitorfd)) {
+	monitor_run.store(monitor_ok);
+	while (1) {
 		nSize = sizeof(SOCKADDR);
-		int ret = RecvFromWithTimeout(sockMonitorfd, buff, 1024, 0, &cliAddr, &nSize, kMonitorReceiveTimeoutMs); // Read with timeout
-		if (ret > 0)
+		int ret = recvfrom(sockMonitorfd, buff, 1024, 0, &cliAddr, &nSize); // Blocking read
+		if (ret >= static_cast<int>(sizeof(hw_mouse) + sizeof(hw_keyboard)))
 		{
+			std::lock_guard<std::mutex> monitorLock(g_kmNetMonitorMutex);
 			memcpy(&hw_mouse, buff, sizeof(hw_mouse));                          // Physical mouse state
 			memcpy(&hw_keyboard, &buff[sizeof(hw_mouse)], sizeof(hw_keyboard)); // Physical keyboard state
 		}
-		else
+		else if (ret == SOCKET_ERROR && WSAGetLastError() == WSAETIMEDOUT)
 		{
-			if (WSAGetLastError() == WSAETIMEDOUT)
+			if (monitor_run.load() == monitor_ok)
 				continue;
 			break;
 		}
+		else
+		{
+			break;
+		}
 	}
-	monitor_run = 0;
-	CloseSocket(sockMonitorfd);
-	WSACleanup();
+	monitor_run.store(0);
+	sockMonitorfd = 0;
 	return 0;
 }
 
 // Enable mouse and keyboard monitoring. Port number must be in range 1024–49151
 int kmNet_monitor(short port)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))       return err_creat_socket;
+	if (sockClientfd <= 0)       return err_creat_socket;
 	tx.head.indexpts++;              // Command statistics value
 	tx.head.cmd = cmd_monitor;       // Command
 	if (port) {
@@ -653,20 +553,20 @@ int kmNet_monitor(short port)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
-	if (IsSocketValid(sockMonitorfd))   // Close listener
-		CloseSocket(sockMonitorfd);
-	if (err < 0)
-		return err_net_rx_timeout;
-	err = NetRxReturnHandle(&rx, &tx);
-	if (err != success)
-		return err;
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	if (sockMonitorfd > 0)   // Close listener
+	{
+		closesocket(sockMonitorfd);
+		sockMonitorfd = 0;
+	}
 	if (port)
 	{
 		CreateThread(NULL, 0, ThreadListenProcess, NULL, 0, NULL);
-		Sleep(10); // Give some time for the thread to start running
 	}
-	return success;
+	Sleep(10); // Give some time for the thread to start running
+	if (err < 0)
+		return err_net_rx_timeout;
+	return NetRxReturnHandle(&rx, &tx);
 }
 
 
@@ -679,7 +579,8 @@ Return value:
 */
 int kmNet_monitor_mouse_left()
 {
-	if (monitor_run != monitor_ok) return -1;
+	if (monitor_run.load() != monitor_ok) return -1;
+	std::lock_guard<std::mutex> monitorLock(g_kmNetMonitorMutex);
 	return (hw_mouse.buttons & 0x01) ? 1 : 0;
 }
 
@@ -692,7 +593,8 @@ Return value:
 */
 int kmNet_monitor_mouse_middle()
 {
-	if (monitor_run != monitor_ok) return -1;
+	if (monitor_run.load() != monitor_ok) return -1;
+	std::lock_guard<std::mutex> monitorLock(g_kmNetMonitorMutex);
 	return (hw_mouse.buttons & 0x04) ? 1 : 0;
 }
 
@@ -705,7 +607,8 @@ Return value:
 */
 int kmNet_monitor_mouse_right()
 {
-	if (monitor_run != monitor_ok) return -1;
+	if (monitor_run.load() != monitor_ok) return -1;
+	std::lock_guard<std::mutex> monitorLock(g_kmNetMonitorMutex);
 	return (hw_mouse.buttons & 0x02) ? 1 : 0;
 }
 
@@ -718,7 +621,8 @@ Return value:
 */
 int kmNet_monitor_mouse_side1()
 {
-	if (monitor_run != monitor_ok) return -1;
+	if (monitor_run.load() != monitor_ok) return -1;
+	std::lock_guard<std::mutex> monitorLock(g_kmNetMonitorMutex);
 	return (hw_mouse.buttons & 0x08) ? 1 : 0;
 }
 
@@ -732,7 +636,8 @@ Return value:
 */
 int kmNet_monitor_mouse_side2()
 {
-	if (monitor_run != monitor_ok) return -1;
+	if (monitor_run.load() != monitor_ok) return -1;
+	std::lock_guard<std::mutex> monitorLock(g_kmNetMonitorMutex);
 	return (hw_mouse.buttons & 0x10) ? 1 : 0;
 }
 
@@ -741,7 +646,8 @@ int kmNet_monitor_mouse_side2()
 int kmNet_monitor_keyboard(short  vkey)
 {
 	unsigned char vk_key = vkey & 0xff;
-	if (monitor_run != monitor_ok) return -1;
+	if (monitor_run.load() != monitor_ok) return -1;
+	std::lock_guard<std::mutex> monitorLock(g_kmNetMonitorMutex);
 	if (vk_key >= KEY_LEFTCONTROL && vk_key <= KEY_RIGHT_GUI) // Control key
 	{
 		switch (vk_key)
@@ -775,8 +681,9 @@ Enable internal box debug printing and send to the specified port (for debugging
 */
 int kmNet_debug(short port, char enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_debug;              // Command
 	tx.head.rand = port | enable << 16;   // Random obfuscation value
@@ -784,7 +691,7 @@ int kmNet_debug(short port, char enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -795,8 +702,9 @@ int kmNet_debug(short port, char enable)
 // Block (mask) mouse left button
 int kmNet_mask_mouse_left(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT0) : (mask_keyboard_mouse_flag &= ~BIT0); // Block mouse left button
@@ -804,7 +712,7 @@ int kmNet_mask_mouse_left(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -813,8 +721,9 @@ int kmNet_mask_mouse_left(int enable)
 // Block (mask) mouse right button
 int kmNet_mask_mouse_right(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT1) : (mask_keyboard_mouse_flag &= ~BIT1); // Block mouse right button
@@ -822,7 +731,7 @@ int kmNet_mask_mouse_right(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -831,8 +740,9 @@ int kmNet_mask_mouse_right(int enable)
 // Block (mask) mouse middle button
 int kmNet_mask_mouse_middle(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT2) : (mask_keyboard_mouse_flag &= ~BIT2); // Block mouse middle button
@@ -840,7 +750,7 @@ int kmNet_mask_mouse_middle(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -849,8 +759,9 @@ int kmNet_mask_mouse_middle(int enable)
 // Block (mask) mouse side button 1
 int kmNet_mask_mouse_side1(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT3) : (mask_keyboard_mouse_flag &= ~BIT3); // Block mouse side button 1
@@ -858,7 +769,7 @@ int kmNet_mask_mouse_side1(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -868,8 +779,9 @@ int kmNet_mask_mouse_side1(int enable)
 // Block (mask) mouse side button 2
 int kmNet_mask_mouse_side2(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT4) : (mask_keyboard_mouse_flag &= ~BIT4); // Block mouse side button 2
@@ -877,7 +789,7 @@ int kmNet_mask_mouse_side2(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -886,8 +798,9 @@ int kmNet_mask_mouse_side2(int enable)
 // Block (mask) mouse X-axis
 int kmNet_mask_mouse_x(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT5) : (mask_keyboard_mouse_flag &= ~BIT5); // Block mouse X-axis
@@ -895,7 +808,7 @@ int kmNet_mask_mouse_x(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -904,8 +817,9 @@ int kmNet_mask_mouse_x(int enable)
 // Block (mask) mouse Y-axis
 int kmNet_mask_mouse_y(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT6) : (mask_keyboard_mouse_flag &= ~BIT6); // Block mouse Y-axis
@@ -913,7 +827,7 @@ int kmNet_mask_mouse_y(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -922,8 +836,9 @@ int kmNet_mask_mouse_y(int enable)
 // Block (mask) mouse wheel
 int kmNet_mask_mouse_wheel(int enable)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = enable ? (mask_keyboard_mouse_flag |= BIT7) : (mask_keyboard_mouse_flag &= ~BIT7); // Block mouse wheel
@@ -931,7 +846,7 @@ int kmNet_mask_mouse_wheel(int enable)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -941,9 +856,10 @@ int kmNet_mask_mouse_wheel(int enable)
 // Block (mask) the specified keyboard key
 int kmNet_mask_keyboard(short vkey)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
 	BYTE v_key = vkey & 0xff;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_mask_mouse;         // Command
 	tx.head.rand = (mask_keyboard_mouse_flag & 0xff) | (v_key << 8); // Mask keyboard vkey
@@ -951,7 +867,7 @@ int kmNet_mask_keyboard(short vkey)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -961,9 +877,10 @@ int kmNet_mask_keyboard(short vkey)
 // Unblock the specified keyboard key
 int kmNet_unmask_keyboard(short vkey)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
 	BYTE v_key = vkey & 0xff;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_unmask_all;         // Command
 	tx.head.rand = (mask_keyboard_mouse_flag & 0xff) | (v_key << 8); // Unmask keyboard vkey
@@ -971,7 +888,7 @@ int kmNet_unmask_keyboard(short vkey)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -981,8 +898,9 @@ int kmNet_unmask_keyboard(short vkey)
 // Unblock all previously set physical blocks
 int kmNet_unmask_all()
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_unmask_all;         // Command
 	mask_keyboard_mouse_flag = 0;
@@ -991,7 +909,7 @@ int kmNet_unmask_all()
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -1001,8 +919,9 @@ int kmNet_unmask_all()
 // Set configuration info (change IP and port)
 int kmNet_setconfig(char* ip, unsigned short port)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	tx.head.indexpts++;                   // Command statistics value
 	tx.head.cmd = cmd_setconfig;          // Command
 	tx.head.rand = inet_addr(ip);
@@ -1012,7 +931,7 @@ int kmNet_setconfig(char* ip, unsigned short port)
 	sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 	SOCKADDR_IN sclient;
 	int clen = sizeof(sclient);
-	err = RecvFromWithTimeout(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
+	err = recvfrom(sockClientfd, (char*)&rx, 1024, 0, (struct sockaddr*)&sclient, &clen);
 	if (err < 0)
 		return err_net_rx_timeout;
 	return NetRxReturnHandle(&rx, &tx);
@@ -1022,8 +941,9 @@ int kmNet_setconfig(char* ip, unsigned short port)
 // Fill the entire LCD screen with the specified color. Use black for clearing the screen.
 int kmNet_lcd_color(unsigned short rgb565)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	for (int y = 0; y < 40; y++)
 	{
 		tx.head.indexpts++;           // Command statistics value
@@ -1035,7 +955,7 @@ int kmNet_lcd_color(unsigned short rgb565)
 		sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 		SOCKADDR_IN sclient;
 		int clen = sizeof(sclient);
-		err = RecvFromWithTimeout(sockClientfd, (char*)&rx, length, 0, (struct sockaddr*)&sclient, &clen);
+		err = recvfrom(sockClientfd, (char*)&rx, length, 0, (struct sockaddr*)&sclient, &clen);
 		if (err < 0)
 			return err_net_rx_timeout;
 	}
@@ -1046,8 +966,9 @@ int kmNet_lcd_color(unsigned short rgb565)
 // Display a 128x80 image at the bottom
 int kmNet_lcd_picture_bottom(unsigned char* buff_128_80)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	for (int y = 0; y < 20; y++)
 	{
 		tx.head.indexpts++;           // Command statistics value
@@ -1058,7 +979,7 @@ int kmNet_lcd_picture_bottom(unsigned char* buff_128_80)
 		sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 		SOCKADDR_IN sclient;
 		int clen = sizeof(sclient);
-		err = RecvFromWithTimeout(sockClientfd, (char*)&rx, length, 0, (struct sockaddr*)&sclient, &clen);
+		err = recvfrom(sockClientfd, (char*)&rx, length, 0, (struct sockaddr*)&sclient, &clen);
 		if (err < 0)
 			return err_net_rx_timeout;
 	}
@@ -1068,8 +989,9 @@ int kmNet_lcd_picture_bottom(unsigned char* buff_128_80)
 // Display a 128x160 image at the bottom
 int kmNet_lcd_picture(unsigned char* buff_128_160)
 {
+	std::lock_guard<std::mutex> commandLock(g_kmNetCommandMutex);
 	int err;
-	if (!IsSocketValid(sockClientfd))        return err_creat_socket;
+	if (sockClientfd <= 0)        return err_creat_socket;
 	for (int y = 0; y < 40; y++)
 	{
 		tx.head.indexpts++;           // Command statistics value
@@ -1080,7 +1002,7 @@ int kmNet_lcd_picture(unsigned char* buff_128_160)
 		sendto(sockClientfd, (const char*)&tx, length, 0, (struct sockaddr*)&addrSrv, sizeof(addrSrv));
 		SOCKADDR_IN sclient;
 		int clen = sizeof(sclient);
-		err = RecvFromWithTimeout(sockClientfd, (char*)&rx, length, 0, (struct sockaddr*)&sclient, &clen);
+		err = recvfrom(sockClientfd, (char*)&rx, length, 0, (struct sockaddr*)&sclient, &clen);
 		if (err < 0)
 			return err_net_rx_timeout;
 	}

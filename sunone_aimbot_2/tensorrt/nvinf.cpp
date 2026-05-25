@@ -5,7 +5,6 @@
 #include <Windows.h>
 #include <iostream>
 #include <fstream>
-#include <limits>
 #include <vector>
 #include <NvOnnxParser.h>
 #include <cuda_runtime.h>
@@ -87,13 +86,7 @@ nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& engineFile, nvinfer
         return nullptr;
     }
 
-    bool verbose = false;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        verbose = config.verbose;
-    }
-
-    if (verbose)
+    if (config.verbose)
     {
         std::cout << "[TensorRT] The engine was successfully loaded from the file: " << engineFile << std::endl;
     }
@@ -102,20 +95,6 @@ nvinfer1::ICudaEngine* loadEngineFromFile(const std::string& engineFile, nvinfer
 
 nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1::ILogger& logger)
 {
-    bool verbose = false;
-    bool fixedByConfig = false;
-    int detectionResolution = 320;
-    bool exportEnableFp16 = false;
-    bool exportEnableFp8 = false;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        verbose = config.verbose;
-        fixedByConfig = config.fixed_input_size;
-        detectionResolution = config.detection_resolution;
-        exportEnableFp16 = config.export_enable_fp16;
-        exportEnableFp8 = config.export_enable_fp8;
-    }
-
     nvinfer1::IBuilder* builder = nvinfer1::createInferBuilder(logger);
     const auto explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
     nvinfer1::INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
@@ -153,27 +132,15 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
     nvinfer1::ITensor* inputTensor = network->getInput(0);
     const char* inName = inputTensor->getName();
     nvinfer1::Dims inDims = inputTensor->getDimensions();
-    int H = -1;
-    int W = -1;
-    if (inDims.nbDims >= 4)
-    {
-        if (inDims.d[2] >= std::numeric_limits<int>::min() &&
-            inDims.d[2] <= std::numeric_limits<int>::max())
-        {
-            H = static_cast<int>(inDims.d[2]);
-        }
-        if (inDims.d[3] >= std::numeric_limits<int>::min() &&
-            inDims.d[3] <= std::numeric_limits<int>::max())
-        {
-            W = static_cast<int>(inDims.d[3]);
-        }
-    }
+    int H = (inDims.nbDims >= 4) ? inDims.d[2] : -1;
+    int W = (inDims.nbDims >= 4) ? inDims.d[3] : -1;
 
     bool fixedByModel = (H > 0 && W > 0);
+    bool fixedByConfig = config.fixed_input_size;
     bool makeStatic = fixedByModel || fixedByConfig;
 
     if (fixedByConfig && (H <= 0 || W <= 0))
-        H = W = detectionResolution;
+        H = W = config.detection_resolution;
 
     nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
     if (makeStatic)
@@ -182,7 +149,7 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
         profile->setDimensions(inName, nvinfer1::OptProfileSelector::kMIN, d);
         profile->setDimensions(inName, nvinfer1::OptProfileSelector::kOPT, d);
         profile->setDimensions(inName, nvinfer1::OptProfileSelector::kMAX, d);
-        if (verbose)
+        if (config.verbose)
             std::cout << "[TensorRT] Static profile " << H << "x" << W << std::endl;
     }
     else
@@ -190,22 +157,22 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
         profile->setDimensions(inName, nvinfer1::OptProfileSelector::kMIN, nvinfer1::Dims4{ 1, 3, 160, 160 });
         profile->setDimensions(inName, nvinfer1::OptProfileSelector::kOPT, nvinfer1::Dims4{ 1, 3, 320, 320 });
         profile->setDimensions(inName, nvinfer1::OptProfileSelector::kMAX, nvinfer1::Dims4{ 1, 3, 640, 640 });
-        if (verbose)
+        if (config.verbose)
             std::cout << "[TensorRT] Dynamic profile 160/320/640" << std::endl;
     }
 
     cfg->addOptimizationProfile(profile);
 
 
-    if (exportEnableFp16)
+    if (config.export_enable_fp16)
     {
-        if (verbose)
+        if (config.verbose)
             std::cout << "[TensorRT] Set FP16" << std::endl;
         cfg->setFlag(nvinfer1::BuilderFlag::kFP16);
     }
-    if (exportEnableFp8)
+    if (config.export_enable_fp8)
     {
-        if (verbose)
+        if (config.verbose)
             std::cout << "[TensorRT] Set FP8" << std::endl;
         cfg->setFlag(nvinfer1::BuilderFlag::kFP8);
     }
@@ -219,6 +186,7 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
     if (!plan)
     {
         std::cerr << "[TensorRT] ERROR: Could not build the engine" << std::endl;
+        cudaStreamDestroy(stream);
         delete parser;
         delete network;
         delete builder;
@@ -252,6 +220,8 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
         std::cerr << "[TensorRT] ERROR: Could not open file to write: " << engineFile << std::endl;
         delete serializedModel;
         delete engine;
+        delete plan;
+        delete runtime;
         delete parser;
         delete network;
         delete builder;
@@ -262,6 +232,7 @@ nvinfer1::ICudaEngine* buildEngineFromOnnx(const std::string& onnxFile, nvinfer1
     p.close();
 
     delete plan;
+    delete serializedModel;
     delete runtime;
     delete parser;
     delete network;

@@ -11,14 +11,20 @@
 #include <vector>
 #include <iostream>
 #include <random>
+#include <string>
 
 #include "mouse.h"
 #include "capture.h"
+#include "Arduino.h"
+#include "RP2350.h"
 #include "sunone_aimbot_2.h"
+#include "ghub.h"
+#include "rzctl.h"
+#include "Teensy41RawHid.h"
 
 namespace
 {
-aim::AimKalmanSettings buildKalmanSettingsFromConfigUnlocked()
+aim::AimKalmanSettings buildKalmanSettingsFromConfig()
 {
     aim::AimKalmanSettings settings;
     settings.enabled = config.kalman_enabled;
@@ -31,10 +37,18 @@ aim::AimKalmanSettings buildKalmanSettingsFromConfigUnlocked()
     return settings;
 }
 
-aim::AimKalmanSettings buildKalmanSettingsFromConfig()
+double smoothstep(double edge0, double edge1, double value)
 {
-    std::lock_guard<std::mutex> lock(configMutex);
-    return buildKalmanSettingsFromConfigUnlocked();
+    if (edge1 <= edge0)
+        return value < edge0 ? 0.0 : 1.0;
+
+    const double t = std::clamp((value - edge0) / (edge1 - edge0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+double lerp(double a, double b, double t)
+{
+    return a + (b - a) * t;
 }
 }
 
@@ -47,7 +61,14 @@ MouseThread::MouseThread(
     double predictionInterval,
     bool auto_shoot,
     float bScope_multiplier,
-    IMouseInput* mouseInputDevice)
+    Arduino* arduinoConnection,
+    RP2350* rp2350Connection,
+    GhubMouse* gHubMouse,
+    KmboxAConnection* Kmbox_A_Connection,
+    KmboxNetConnection* Kmbox_Net_Connection,
+    MakcuConnection* makcuConnection,
+    RzctlMouse* rzctlMouse,
+    Teensy41RawHid* teensy41RawHidConnection)
     : screen_width(resolution),
     screen_height(resolution),
     prediction_interval(predictionInterval),
@@ -60,7 +81,14 @@ MouseThread::MouseThread(
     center_y(resolution / 2.0),
     auto_shoot(auto_shoot),
     bScope_multiplier(bScope_multiplier),
-    mouseInput(mouseInputDevice),
+    arduino(arduinoConnection),
+    rp2350(rp2350Connection),
+    kmbox_a(Kmbox_A_Connection),
+    kmbox_net(Kmbox_Net_Connection),
+    makcu(makcuConnection),
+    gHub(gHubMouse),
+    rzctl(rzctlMouse),
+    teensy41RawHid(teensy41RawHidConnection),
 
     prev_velocity_x(0.0),
     prev_velocity_y(0.0),
@@ -70,14 +98,11 @@ MouseThread::MouseThread(
     prev_time = std::chrono::steady_clock::time_point();
     last_target_time = std::chrono::steady_clock::now();
 
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        wind_mouse_enabled = config.wind_mouse_enabled;
-        wind_G = config.wind_G;
-        wind_W = config.wind_W;
-        wind_M = config.wind_M;
-        wind_D = config.wind_D;
-    }
+    wind_mouse_enabled = config.wind_mouse_enabled;
+    wind_G = config.wind_G;
+    wind_W = config.wind_W;
+    wind_M = config.wind_M;
+    wind_D = config.wind_D;
     resetWindState();
     clearWindDebugTrail();
     targetKalman.setSettings(buildKalmanSettingsFromConfig());
@@ -116,7 +141,7 @@ void MouseThread::updateConfig(
     wind_M = config.wind_M; wind_D = config.wind_D;
     resetWindState();
     clearWindDebugTrail();
-    targetKalman.setSettings(buildKalmanSettingsFromConfigUnlocked());
+    targetKalman.setSettings(buildKalmanSettingsFromConfig());
     targetKalman.reset();
     lastKalmanTelemetry = {};
     lastPredictionLookaheadSec = 0.0;
@@ -310,6 +335,7 @@ void MouseThread::appendWindDebugStep(int dx, int dy)
     double deltaPxY = delta.second;
     if (std::abs(deltaPxX) < 1e-8 && std::abs(deltaPxY) < 1e-8)
         return;
+
     std::lock_guard<std::mutex> lock(windDebugTrailMutex);
     const auto now = std::chrono::steady_clock::now();
     pruneWindDebugTrailLocked(now);
@@ -390,7 +416,6 @@ void MouseThread::recordMotionCompensationStep(int dx, int dy)
     std::lock_guard<std::mutex> lock(motionCompensationMutex);
     pruneMotionCompensationTrailLocked(now);
     motionCompensationTrail.push_back({ delta.first, delta.second, now });
-
     constexpr size_t maxSamples = 512;
     while (motionCompensationTrail.size() > maxSamples)
         motionCompensationTrail.pop_front();
@@ -438,7 +463,6 @@ double MouseThread::currentDetectionDelaySec(double observationAgeSec) const
             std::lock_guard<std::mutex> lock(configMutex);
             backend = config.backend;
         }
-
         if (backend == "DML")
         {
             if (dml_detector)
@@ -459,17 +483,9 @@ double MouseThread::currentDetectionDelaySec(double observationAgeSec) const
 double MouseThread::currentPredictionLookaheadSec(double detectionDelaySec) const
 {
     double lookahead = std::max(0.0, prediction_interval);
-    bool compensateDetectionDelay = false;
-    float additionalPredictionMs = 0.0f;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        compensateDetectionDelay = config.kalman_compensate_detection_delay;
-        additionalPredictionMs = config.kalman_additional_prediction_ms;
-    }
-
-    if (compensateDetectionDelay)
+    if (config.kalman_compensate_detection_delay)
         lookahead += std::max(0.0, detectionDelaySec);
-    lookahead += static_cast<double>(additionalPredictionMs) * 0.001;
+    lookahead += static_cast<double>(config.kalman_additional_prediction_ms) * 0.001;
     return std::clamp(lookahead, 0.0, 1.5);
 }
 
@@ -481,7 +497,6 @@ std::pair<double, double> MouseThread::predict_target_position(
     auto current_time = std::chrono::steady_clock::now();
     if (observationTime.time_since_epoch().count() == 0)
         observationTime = current_time;
-
     double observationAgeSec = std::chrono::duration<double>(current_time - observationTime).count();
     if (!std::isfinite(observationAgeSec) || observationAgeSec < 0.0)
         observationAgeSec = 0.0;
@@ -535,20 +550,76 @@ void MouseThread::sendMovementToDriver(int dx, int dy)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(inputDevicesMutex);
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    const std::string inputMethod = config.input_method;
+    bool sent = false;
 
-    if (!mouseInput)
+    if (inputMethod == "TEENSY41_HID")
     {
-        return;
+        if (teensy41RawHid)
+            sent = teensy41RawHid->move(dx, dy);
+    }
+    else if (inputMethod == "RAZER")
+    {
+        if (rzctl)
+            sent = rzctl->mouse_xy(dx, dy);
+    }
+    else if (inputMethod == "KMBOX_NET")
+    {
+        if (kmbox_net)
+        {
+            kmbox_net->move(dx, dy);
+            sent = true;
+        }
+    }
+    else if (inputMethod == "KMBOX_A")
+    {
+        if (kmbox_a)
+        {
+            kmbox_a->move(dx, dy);
+            sent = true;
+        }
+    }
+    else if (inputMethod == "MAKCU")
+    {
+        if (makcu)
+        {
+            makcu->move(dx, dy);
+            sent = true;
+        }
+    }
+    else if (inputMethod == "RP2350")
+    {
+        if (rp2350)
+        {
+            rp2350->move(dx, dy);
+            sent = true;
+        }
+    }
+    else if (inputMethod == "ARDUINO")
+    {
+        if (arduino)
+        {
+            arduino->move(dx, dy);
+            sent = true;
+        }
+    }
+    else if (inputMethod == "GHUB")
+    {
+        if (gHub)
+            sent = gHub->mouse_xy(dx, dy);
+    }
+    else if (inputMethod == "WIN32")
+    {
+        INPUT in{ 0 };
+        in.type = INPUT_MOUSE;
+        in.mi.dx = dx;  in.mi.dy = dy;
+        in.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK;
+        sent = (SendInput(1, &in, sizeof(INPUT)) == 1);
     }
 
-    if (mouseInput->move(dx, dy))
+    if (sent)
         recordMotionCompensationStep(dx, dy);
-}
-
-void MouseThread::moveRelative(int dx, int dy)
-{
-    sendMovementToDriver(dx, dy);
 }
 
 std::pair<double, double> MouseThread::calc_movement(double tx, double ty)
@@ -568,11 +639,7 @@ std::pair<double, double> MouseThread::calc_movement(double tx, double ty)
     double fps = static_cast<double>(captureFps.load());
     if (fps > 30.0) corr = 30.0 / fps;
 
-    std::pair<double, double> counts_pair;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        counts_pair = config.degToCounts(mmx, mmy, fov_x);
-    }
+    auto counts_pair = config.degToCounts(mmx, mmy, fov_x);
     double move_x = counts_pair.first * speed * corr;
     double move_y = counts_pair.second * speed * corr;
 
@@ -581,32 +648,66 @@ std::pair<double, double> MouseThread::calc_movement(double tx, double ty)
 
 double MouseThread::calculate_speed_multiplier(double distance)
 {
-    float snapRadius = 0.0f;
-    float nearRadius = 0.0f;
-    float speedCurveExponent = 1.0f;
-    float snapBoostFactor = 1.0f;
+    const double snapRadius = std::max(0.0, static_cast<double>(config.snapRadius));
+    const double nearRadius = std::max(snapRadius + 1e-6, static_cast<double>(config.nearRadius));
+    const double transitionRadius = std::clamp(static_cast<double>(config.closeRangeTransition), 0.0, 80.0);
+    const double curveExponent = std::max(0.001, static_cast<double>(config.speedCurveExponent));
+
+    auto nearSpeed = [&](double d)
     {
-        std::lock_guard<std::mutex> lock(configMutex);
-        snapRadius = config.snapRadius;
-        nearRadius = config.nearRadius;
-        speedCurveExponent = config.speedCurveExponent;
-        snapBoostFactor = config.snapBoostFactor;
+        double t = std::clamp(d / nearRadius, 0.0, 1.0);
+        double curve = 1.0 - std::pow(1.0 - t, curveExponent);
+        return min_speed_multiplier +
+            (max_speed_multiplier - min_speed_multiplier) * curve;
+    };
+
+    auto farSpeed = [&](double d)
+    {
+        double norm = std::clamp(d / max_distance, 0.0, 1.0);
+        return min_speed_multiplier +
+            (max_speed_multiplier - min_speed_multiplier) * norm;
+    };
+
+    const double snapSpeed = min_speed_multiplier * config.snapBoostFactor;
+
+    if (transitionRadius <= 1e-6)
+    {
+        if (distance < snapRadius)
+            return snapSpeed;
+
+        if (distance < nearRadius)
+            return nearSpeed(distance);
+
+        return farSpeed(distance);
+    }
+
+    const double snapBlendRadius = std::min(transitionRadius, std::max(0.0, (nearRadius - snapRadius) * 0.45));
+    if (snapBlendRadius > 1e-6 && distance < snapRadius + snapBlendRadius)
+    {
+        const double snapStart = std::max(0.0, snapRadius - snapBlendRadius);
+        if (distance <= snapStart)
+            return snapSpeed;
+
+        const double t = smoothstep(snapStart, snapRadius + snapBlendRadius, distance);
+        return lerp(snapSpeed, nearSpeed(distance), t);
     }
 
     if (distance < snapRadius)
-        return min_speed_multiplier * snapBoostFactor;
+        return snapSpeed;
 
-    if (nearRadius > 0.0f && distance < nearRadius)
+    const double nearBlendRadius = std::min(transitionRadius, nearRadius * 0.5);
+    const double nearStart = std::max(snapRadius, nearRadius - nearBlendRadius);
+    const double nearEnd = nearRadius + nearBlendRadius;
+    if (distance < nearStart)
+        return nearSpeed(distance);
+
+    if (nearBlendRadius > 1e-6 && distance < nearEnd)
     {
-        double t = distance / nearRadius;
-        double curve = 1.0 - std::pow(1.0 - t, speedCurveExponent);
-        return min_speed_multiplier +
-            (max_speed_multiplier - min_speed_multiplier) * curve;
+        const double t = smoothstep(nearStart, nearEnd, distance);
+        return lerp(nearSpeed(distance), farSpeed(distance), t);
     }
 
-    double norm = std::clamp(distance / max_distance, 0.0, 1.0);
-    return min_speed_multiplier +
-        (max_speed_multiplier - min_speed_multiplier) * norm;
+    return farSpeed(distance);
 }
 
 bool MouseThread::check_target_in_scope(double target_x, double target_y, double target_w, double target_h, double reduction_factor)
@@ -623,6 +724,130 @@ bool MouseThread::check_target_in_scope(double target_x, double target_y, double
     double y2 = center_target_y + reduced_h;
 
     return (center_x > x1 && center_x < x2 && center_y > y1 && center_y < y2);
+}
+
+bool MouseThread::pressSelectedInput(const std::string& inputMethod)
+{
+    if (inputMethod == "TEENSY41_HID")
+        return teensy41RawHid && teensy41RawHid->press();
+
+    if (inputMethod == "RAZER")
+        return rzctl && rzctl->mouse_down();
+
+    if (inputMethod == "KMBOX_NET")
+    {
+        if (!kmbox_net || !kmbox_net->isOpen())
+            return false;
+        kmbox_net->leftDown();
+        return true;
+    }
+
+    if (inputMethod == "KMBOX_A")
+    {
+        if (!kmbox_a || !kmbox_a->isOpen())
+            return false;
+        kmbox_a->leftDown();
+        return true;
+    }
+
+    if (inputMethod == "MAKCU")
+    {
+        if (!makcu || !makcu->isOpen())
+            return false;
+        makcu->press(0);
+        return true;
+    }
+
+    if (inputMethod == "RP2350")
+    {
+        if (!rp2350 || !rp2350->isOpen())
+            return false;
+        rp2350->press();
+        return true;
+    }
+
+    if (inputMethod == "ARDUINO")
+    {
+        if (!arduino || !arduino->isOpen())
+            return false;
+        arduino->press();
+        return true;
+    }
+
+    if (inputMethod == "GHUB")
+        return gHub && gHub->mouse_down();
+
+    if (inputMethod == "WIN32")
+    {
+        INPUT input = { 0 };
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+
+    return false;
+}
+
+bool MouseThread::releaseSelectedInput(const std::string& inputMethod)
+{
+    if (inputMethod == "TEENSY41_HID")
+        return teensy41RawHid && teensy41RawHid->release();
+
+    if (inputMethod == "RAZER")
+        return rzctl && rzctl->mouse_up();
+
+    if (inputMethod == "KMBOX_NET")
+    {
+        if (!kmbox_net || !kmbox_net->isOpen())
+            return false;
+        kmbox_net->leftUp();
+        return true;
+    }
+
+    if (inputMethod == "KMBOX_A")
+    {
+        if (!kmbox_a || !kmbox_a->isOpen())
+            return false;
+        kmbox_a->leftUp();
+        return true;
+    }
+
+    if (inputMethod == "MAKCU")
+    {
+        if (!makcu || !makcu->isOpen())
+            return false;
+        makcu->release(0);
+        return true;
+    }
+
+    if (inputMethod == "RP2350")
+    {
+        if (!rp2350 || !rp2350->isOpen())
+            return false;
+        rp2350->release();
+        return true;
+    }
+
+    if (inputMethod == "ARDUINO")
+    {
+        if (!arduino || !arduino->isOpen())
+            return false;
+        arduino->release();
+        return true;
+    }
+
+    if (inputMethod == "GHUB")
+        return gHub && gHub->mouse_up();
+
+    if (inputMethod == "WIN32")
+    {
+        INPUT input = { 0 };
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    }
+
+    return false;
 }
 
 void MouseThread::moveMouse(const AimbotTarget& target)
@@ -649,7 +874,6 @@ void MouseThread::moveMousePivot(
         pivotX -= cameraDelta.first;
         pivotY -= cameraDelta.second;
     }
-
     auto predicted = predict_target_position(pivotX, pivotY, observationTime);
     auto mv = calc_movement(predicted.first, predicted.second);
     int mx = static_cast<int>(mv.first);
@@ -670,6 +894,13 @@ void MouseThread::moveMousePivot(
     }
 }
 
+void MouseThread::moveRelative(int dx, int dy)
+{
+    if (dx == 0 && dy == 0)
+        return;
+    queueMove(dx, dy);
+}
+
 void MouseThread::clearQueuedMoves()
 {
     std::lock_guard<std::mutex> lock(queueMtx);
@@ -680,45 +911,34 @@ void MouseThread::clearQueuedMoves()
 
 void MouseThread::pressMouse(const AimbotTarget& target)
 {
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+
     bool bScope = check_target_in_scope(target.x, target.y, target.w, target.h, bScope_multiplier);
     if (bScope && !mouse_pressed)
     {
-        std::lock_guard<std::mutex> lock(inputDevicesMutex);
-        if (!mouseInput)
+        const std::string inputMethod = config.input_method;
+        if (pressSelectedInput(inputMethod))
         {
-            return;
+            mouse_pressed.store(true);
         }
-
-        if (mouseInput->leftDown())
-            mouse_pressed = true;
     }
     else if (!bScope && mouse_pressed)
     {
-        std::lock_guard<std::mutex> lock(inputDevicesMutex);
-        if (!mouseInput)
-        {
-            mouse_pressed = false;
-            return;
-        }
-
-        if (mouseInput->leftUp())
-            mouse_pressed = false;
+        const std::string inputMethod = config.input_method;
+        releaseSelectedInput(inputMethod);
+        mouse_pressed.store(false);
     }
 }
 
 void MouseThread::releaseMouse()
 {
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+
     if (mouse_pressed)
     {
-        std::lock_guard<std::mutex> lock(inputDevicesMutex);
-        if (!mouseInput)
-        {
-            mouse_pressed = false;
-            return;
-        }
-
-        if (mouseInput->leftUp())
-            mouse_pressed = false;
+        const std::string inputMethod = config.input_method;
+        releaseSelectedInput(inputMethod);
+        mouse_pressed.store(false);
     }
 }
 
@@ -741,12 +961,7 @@ void MouseThread::checkAndResetPredictions()
 {
     auto current_time = std::chrono::steady_clock::now();
     double elapsed = std::chrono::duration<double>(current_time - last_target_time).count();
-    double resetTimeoutSec = 0.5;
-    {
-        std::lock_guard<std::mutex> lock(configMutex);
-        resetTimeoutSec = static_cast<double>(config.kalman_reset_timeout_sec);
-    }
-    const double timeoutSec = std::clamp(resetTimeoutSec, 0.05, 3.0);
+    const double timeoutSec = std::clamp(static_cast<double>(config.kalman_reset_timeout_sec), 0.05, 3.0);
 
     if (elapsed > timeoutSec && target_detected.load())
     {
@@ -846,8 +1061,68 @@ std::vector<std::pair<double, double>> MouseThread::getWindDebugTrail()
     return out;
 }
 
-void MouseThread::setMouseInput(IMouseInput* newMouseInput)
+void MouseThread::setArduinoConnection(Arduino* newArduino)
 {
-    std::lock_guard<std::mutex> lock(inputDevicesMutex);
-    mouseInput = newMouseInput;
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    arduino = newArduino;
+}
+
+void MouseThread::setRP2350Connection(RP2350* newRP2350)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    rp2350 = newRP2350;
+}
+
+void MouseThread::setKmboxAConnection(KmboxAConnection* newKmbox_a)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    kmbox_a = newKmbox_a;
+}
+
+void MouseThread::setKmboxNetConnection(KmboxNetConnection* newKmbox_net)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    kmbox_net = newKmbox_net;
+}
+
+void MouseThread::setMakcuConnection(MakcuConnection* newMakcu)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    makcu = newMakcu;
+}
+
+void MouseThread::setGHubMouse(GhubMouse* newGHub)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    gHub = newGHub;
+}
+
+void MouseThread::setRzctlMouse(RzctlMouse* newRzctl)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    rzctl = newRzctl;
+}
+
+void MouseThread::setTeensy41RawHid(Teensy41RawHid* newTeensy41RawHid)
+{
+    std::lock_guard<std::mutex> lock(input_method_mutex);
+    teensy41RawHid = newTeensy41RawHid;
+}
+
+void MouseThread::detachInputDevices()
+{
+    {
+        std::lock_guard<std::mutex> lock(input_method_mutex);
+        arduino = nullptr;
+        rp2350 = nullptr;
+        kmbox_a = nullptr;
+        kmbox_net = nullptr;
+        makcu = nullptr;
+        gHub = nullptr;
+        rzctl = nullptr;
+        teensy41RawHid = nullptr;
+        mouse_pressed.store(false);
+    }
+
+    clearQueuedMoves();
 }

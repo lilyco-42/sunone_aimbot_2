@@ -4,18 +4,20 @@
 #include <Windows.h>
 
 #include <atomic>
-#include <algorithm>
 #include <chrono>
 #include <thread>
-#include <mutex>
+#include <iostream>
 
 #include "config.h"
+#include "Arduino.h"
+#include "RP2350.h"
 #include "keyboard_listener.h"
 #include "mouse.h"
 #include "keycodes.h"
 #include "sunone_aimbot_2.h"
 #include "capture.h"
-#include "runtime/thread_loops.h"
+#include "KmboxNetConnection.h"
+#include "Makcu.h"
 
 extern std::atomic<bool> shouldExit;
 extern std::atomic<bool> aiming;
@@ -41,72 +43,86 @@ bool prevDownArrow = false;
 bool prevLeftArrow = false;
 bool prevRightArrow = false;
 
-namespace
+bool isAnyKeyPressed(const std::vector<std::string>& keys)
 {
-struct KeyboardConfigSnapshot
-{
-    bool autoAim = false;
-    bool enableArrowsSettings = false;
-    std::vector<std::string> buttonTargeting;
-    std::vector<std::string> buttonShoot;
-    std::vector<std::string> buttonZoom;
-    std::vector<std::string> buttonExit;
-    std::vector<std::string> buttonPause;
-    std::vector<std::string> buttonReloadConfig;
-    std::vector<std::string> buttonOpenOverlay;
-};
+    bool usePhysicalDevice =
+        config.input_method == "ARDUINO" ||
+        config.input_method == "RP2350" ||
+        config.input_method == "TEENSY41_HID" ||
+        config.input_method == "KMBOX_NET" ||
+        config.input_method == "KMBOX_A" ||
+        config.input_method == "MAKCU";
 
-KeyboardConfigSnapshot SnapshotKeyboardConfig()
-{
-    std::lock_guard<std::mutex> lock(configMutex);
-    KeyboardConfigSnapshot snapshot;
-    snapshot.autoAim = config.auto_aim;
-    snapshot.enableArrowsSettings = config.enable_arrows_settings;
-    snapshot.buttonTargeting = config.button_targeting;
-    snapshot.buttonShoot = config.button_shoot;
-    snapshot.buttonZoom = config.button_zoom;
-    snapshot.buttonExit = config.button_exit;
-    snapshot.buttonPause = config.button_pause;
-    snapshot.buttonReloadConfig = config.button_reload_config;
-    snapshot.buttonOpenOverlay = config.button_open_overlay;
-    return snapshot;
-}
-
-bool isAimingActiveFromDevices()
-{
-    std::lock_guard<std::mutex> lock(inputDevicesMutex);
-    return activeMouseInputOwner && activeMouseInputOwner->isOpen() && activeMouseInputOwner->aimingActive();
-}
-
-bool isShootingActiveFromDevices()
-{
-    std::lock_guard<std::mutex> lock(inputDevicesMutex);
-    return activeMouseInputOwner && activeMouseInputOwner->isOpen() && activeMouseInputOwner->shootingActive();
-}
-
-bool isZoomingActiveFromDevices()
-{
-    std::lock_guard<std::mutex> lock(inputDevicesMutex);
-    return activeMouseInputOwner && activeMouseInputOwner->isOpen() && activeMouseInputOwner->zoomingActive();
-}
-
-bool isAnyKeyPressedInternal(const std::vector<std::string>& keys)
-{
-    bool usePhysicalDevice = false;
-
-    std::lock_guard<std::mutex> lock(inputDevicesMutex);
-
-    IMouseInput* input = activeMouseInputOwner.get();
-    if (input && input->isOpen() && input->hasPhysicalButtonState())
+    if (makcuSerial && makcuSerial->isOpen()) {
         usePhysicalDevice = true;
+    }
+    else if (kmboxNetSerial && kmboxNetSerial->isOpen()) {
+        usePhysicalDevice = true;
+    }
+    else if (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen()) {
+        usePhysicalDevice = true;
+    }
+    else if (config.rp2350_enable_keys && rp2350Serial && rp2350Serial->isOpen()) {
+        usePhysicalDevice = true;
+    }
+    else if (teensy41RawHid && teensy41RawHid->isOpen()) {
+        usePhysicalDevice = true;
+    }
 
     for (const auto& key_name : keys)
     {
         int key_code = KeyCodes::getKeyCode(key_name);
         bool pressed = false;
 
-        if (input && input->isOpen())
-            pressed = input->keyPressed(key_name);
+        // KmboxNet
+        if (kmboxNetSerial && kmboxNetSerial->isOpen())
+        {
+            if (key_name == "LeftMouseButton")       pressed = kmboxNetSerial->monitorMouseLeft() == 1;
+            else if (key_name == "RightMouseButton")  pressed = kmboxNetSerial->monitorMouseRight() == 1;
+            else if (key_name == "MiddleMouseButton") pressed = kmboxNetSerial->monitorMouseMiddle() == 1;
+            else if (key_name == "X1MouseButton")     pressed = kmboxNetSerial->monitorMouseSide1() == 1;
+            else if (key_name == "X2MouseButton")     pressed = kmboxNetSerial->monitorMouseSide2() == 1;
+        }
+
+        // MAKCU
+        if (!pressed && makcuSerial && makcuSerial->isOpen())
+        {
+            if (key_name == "LeftMouseButton")       pressed = makcuSerial->shooting_active;
+            else if (key_name == "RightMouseButton")  pressed = makcuSerial->zooming_active;
+            else if (key_name == "X2MouseButton")     pressed = makcuSerial->aiming_active;
+        }
+
+        // KmboxNet
+        if (!pressed && kmboxNetSerial && kmboxNetSerial->isOpen())
+        {
+            if (key_name == "LeftMouseButton")       pressed = kmboxNetSerial->shooting_active;
+            else if (key_name == "RightMouseButton")  pressed = kmboxNetSerial->zooming_active;
+            else if (key_name == "X2MouseButton")     pressed = kmboxNetSerial->aiming_active;
+        }
+
+        // Arduino
+        if (!pressed && config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen())
+        {
+            if (key_name == "LeftMouseButton")       pressed = arduinoSerial->shooting_active.load();
+            else if (key_name == "RightMouseButton")  pressed = arduinoSerial->zooming_active.load();
+            else if (key_name == "X2MouseButton")     pressed = arduinoSerial->aiming_active.load();
+        }
+
+        // RP2350
+        if (!pressed && config.rp2350_enable_keys && rp2350Serial && rp2350Serial->isOpen())
+        {
+            if (key_name == "LeftMouseButton")       pressed = rp2350Serial->shooting_active;
+            else if (key_name == "RightMouseButton")  pressed = rp2350Serial->zooming_active;
+            else if (key_name == "X2MouseButton")     pressed = rp2350Serial->aiming_active;
+        }
+
+        // Teensy 4.1 RawHID
+        if (!pressed && teensy41RawHid && teensy41RawHid->isOpen())
+        {
+            if (key_name == "LeftMouseButton")       pressed = teensy41RawHid->shootingActive();
+            else if (key_name == "RightMouseButton")  pressed = teensy41RawHid->zoomingActive();
+            else if (key_name == "X2MouseButton")     pressed = teensy41RawHid->aimingActive();
+        }
 
         // Win32 API
         if (!pressed && key_code != -1)
@@ -127,12 +143,6 @@ bool isAnyKeyPressedInternal(const std::vector<std::string>& keys)
     }
     return false;
 }
-} // namespace
-
-bool isAnyKeyPressed(const std::vector<std::string>& keys)
-{
-    return isAnyKeyPressedInternal(keys);
-}
 
 bool isAnyKeyPressedWin32Only(const std::vector<std::string>& keys)
 {
@@ -149,13 +159,15 @@ void keyboardListener()
 {
     while (!shouldExit)
     {
-        KeyboardConfigSnapshot cfg = SnapshotKeyboardConfig();
-
         // Aiming
-        if (!cfg.autoAim)
+        if (!config.auto_aim)
         {
-            aiming = isAnyKeyPressedInternal(cfg.buttonTargeting) ||
-                isAimingActiveFromDevices();
+            aiming = isAnyKeyPressed(config.button_targeting) ||
+                (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->aiming_active.load()) ||
+                (config.rp2350_enable_keys && rp2350Serial && rp2350Serial->isOpen() && rp2350Serial->aiming_active) ||
+                (teensy41RawHid && teensy41RawHid->isOpen() && teensy41RawHid->aimingActive()) ||
+                (kmboxNetSerial && kmboxNetSerial->isOpen() && kmboxNetSerial->aiming_active) ||
+                (makcuSerial && makcuSerial->isOpen() && makcuSerial->aiming_active);
         }
         else
         {
@@ -163,25 +175,31 @@ void keyboardListener()
         }
 
         // Shooting
-        shooting = isAnyKeyPressedInternal(cfg.buttonShoot) ||
-            isShootingActiveFromDevices();
+        shooting = isAnyKeyPressed(config.button_shoot) ||
+            (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->shooting_active.load()) ||
+            (config.rp2350_enable_keys && rp2350Serial && rp2350Serial->isOpen() && rp2350Serial->shooting_active) ||
+            (teensy41RawHid && teensy41RawHid->isOpen() && teensy41RawHid->shootingActive()) ||
+            (kmboxNetSerial && kmboxNetSerial->isOpen() && kmboxNetSerial->shooting_active) ||
+            (makcuSerial && makcuSerial->isOpen() && makcuSerial->shooting_active);
 
         // Zooming
-        zooming = isAnyKeyPressedInternal(cfg.buttonZoom) ||
-            isZoomingActiveFromDevices();
+        zooming = isAnyKeyPressed(config.button_zoom) ||
+            (config.arduino_enable_keys && arduinoSerial && arduinoSerial->isOpen() && arduinoSerial->zooming_active.load()) ||
+            (config.rp2350_enable_keys && rp2350Serial && rp2350Serial->isOpen() && rp2350Serial->zooming_active) ||
+            (teensy41RawHid && teensy41RawHid->isOpen() && teensy41RawHid->zoomingActive()) ||
+            (kmboxNetSerial && kmboxNetSerial->isOpen() && kmboxNetSerial->zooming_active) ||
+            (makcuSerial && makcuSerial->isOpen() && makcuSerial->zooming_active);
 
         // Exit - Win32
-        if (isAnyKeyPressedWin32Only(cfg.buttonExit))
+        if (isAnyKeyPressedWin32Only(config.button_exit))
         {
             shouldExit = true;
-            gameOverlayShouldExit.store(true);
-            detectionBuffer.cv.notify_all();
-            frameCV.notify_all();
+            quick_exit(0);
         }
 
         // Pause detection - Win32
         static bool pausePressed = false;
-        if (isAnyKeyPressedWin32Only(cfg.buttonPause))
+        if (isAnyKeyPressedWin32Only(config.button_pause))
         {
             if (!pausePressed)
             {
@@ -196,27 +214,24 @@ void keyboardListener()
 
         // Reload config - Win32
         static bool reloadPressed = false;
-        if (isAnyKeyPressedWin32Only(cfg.buttonReloadConfig))
+        if (isAnyKeyPressedWin32Only(config.button_reload_config))
         {
             if (!reloadPressed)
             {
-                {
-                    std::lock_guard<std::mutex> lock(configMutex);
-                    config.loadConfig();
+                config.loadConfig();
 
-                    if (globalMouseThread)
-                    {
-                        globalMouseThread->updateConfig(
-                            config.detection_resolution,
-                            config.fovX,
-                            config.fovY,
-                            config.minSpeedMultiplier,
-                            config.maxSpeedMultiplier,
-                            config.predictionInterval,
-                            config.auto_shoot,
-                            config.bScope_multiplier
-                        );
-                    }
+                if (globalMouseThread)
+                {
+                    globalMouseThread->updateConfig(
+                        config.detection_resolution,
+                        config.fovX,
+                        config.fovY,
+                        config.minSpeedMultiplier,
+                        config.maxSpeedMultiplier,
+                        config.predictionInterval,
+                        config.auto_shoot,
+                        config.bScope_multiplier
+                    );
                 }
                 reloadPressed = true;
             }
@@ -228,7 +243,7 @@ void keyboardListener()
 
         // Open overlay - Win32
         static bool overlayPressed = false;
-        if (isAnyKeyPressedWin32Only(cfg.buttonOpenOverlay))
+        if (isAnyKeyPressedWin32Only(config.button_open_overlay))
         {
             if (!overlayPressed)
             {
@@ -248,11 +263,10 @@ void keyboardListener()
         bool shiftKey = isAnyKeyPressedWin32Only(shiftKeys);
 
         // Adjust offsets based on arrow keys and shift combination
-        if (cfg.enableArrowsSettings)
+        if (config.enable_arrows_settings)
         {
             if (upArrow && !prevUpArrow)
             {
-                std::lock_guard<std::mutex> lock(configMutex);
                 if (shiftKey)
                 {
                     // Shift + Up Arrow: Decrease head offset
@@ -266,7 +280,6 @@ void keyboardListener()
             }
             if (downArrow && !prevDownArrow)
             {
-                std::lock_guard<std::mutex> lock(configMutex);
                 if (shiftKey)
                 {
                     // Shift + Down Arrow: Increase head offset
@@ -283,13 +296,11 @@ void keyboardListener()
             // Adjust norecoil strength based on left and right arrow keys
             if (leftArrow && !prevLeftArrow)
             {
-                std::lock_guard<std::mutex> lock(configMutex);
                 config.easynorecoilstrength = std::max(0.1f, config.easynorecoilstrength - NORECOIL_STEP);
             }
 
             if (rightArrow && !prevRightArrow)
             {
-                std::lock_guard<std::mutex> lock(configMutex);
                 config.easynorecoilstrength = std::min(500.0f, config.easynorecoilstrength + NORECOIL_STEP);
             }
         }
