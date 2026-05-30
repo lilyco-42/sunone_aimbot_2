@@ -84,6 +84,31 @@ function Resolve-OptionalBoolean {
     throw "Invalid boolean value '$Value' for: $Question"
 }
 
+function Resolve-OpenCvAlreadyBuilt {
+    param(
+        [AllowNull()][object]$Value,
+        [Parameter(Mandatory)][string]$Backend,
+        [AllowNull()][object]$Layout,
+        [switch]$NonInteractive
+    )
+
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace([string]$Value)) {
+        if ($Layout) {
+            Write-BuildStep "Detected valid OpenCV layout: $($Layout.Root)" $Backend
+            return $true
+        }
+
+        Write-BuildStep "OpenCV layout is missing or incomplete; it will be prepared automatically." $Backend
+        return $false
+    }
+
+    return Resolve-OptionalBoolean `
+        -Value $Value `
+        -Question "OpenCV already built for $($Backend.ToUpperInvariant())?" `
+        -Default $false `
+        -NonInteractive:$NonInteractive
+}
+
 function Invoke-External {
     param(
         [Parameter(Mandatory)][string]$Exe,

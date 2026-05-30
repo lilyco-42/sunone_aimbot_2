@@ -10,6 +10,7 @@
 #include <chrono>
 #include <limits>
 #include <algorithm>
+#include <cmath>
 #include <dxgi.h>
 
 #include "dml_detector.h"
@@ -44,6 +45,155 @@ bool tryInt64ToInt(int64_t value, int* out)
 
     *out = static_cast<int>(value);
     return true;
+}
+
+float sigmoidFloat(float x)
+{
+    if (x >= 0.0f)
+    {
+        const float z = std::exp(-x);
+        return 1.0f / (1.0f + z);
+    }
+    const float z = std::exp(x);
+    return z / (1.0f + z);
+}
+
+float softplusFloat(float x)
+{
+    if (x > 20.0f) return x;
+    if (x < -20.0f) return std::exp(x);
+    return std::log1p(std::exp(x));
+}
+
+bool isShape4(const std::vector<int64_t>& shape)
+{
+    return shape.size() == 4 && shape[0] > 0 && shape[1] > 0 && shape[2] > 0 && shape[3] > 0;
+}
+
+size_t nchwOffset(int batch, int channel, int y, int x, int channels, int height, int width)
+{
+    return (((static_cast<size_t>(batch) * static_cast<size_t>(channels) + static_cast<size_t>(channel))
+        * static_cast<size_t>(height) + static_cast<size_t>(y)) * static_cast<size_t>(width))
+        + static_cast<size_t>(x);
+}
+
+int findOutputIndex(const std::vector<std::string>& names, const char* wanted)
+{
+    for (int i = 0; i < static_cast<int>(names.size()); ++i)
+    {
+        if (names[i] == wanted)
+            return i;
+    }
+    return -1;
+}
+
+std::vector<Detection> decodeSunPointRaw(
+    const float* heat,
+    const std::vector<int64_t>& heatShape,
+    const float* box,
+    const std::vector<int64_t>& boxShape,
+    const float* offset,
+    const std::vector<int64_t>& offsetShape,
+    int batchIndex,
+    int targetW,
+    int targetH,
+    float confThreshold,
+    float nmsThreshold,
+    std::chrono::duration<double, std::milli>* nmsTime)
+{
+    std::vector<Detection> detections;
+    if (!heat || !box || !offset || !isShape4(heatShape) || !isShape4(boxShape) || !isShape4(offsetShape))
+        return detections;
+
+    const int batch = static_cast<int>(heatShape[0]);
+    const int classes = static_cast<int>(heatShape[1]);
+    const int gridH = static_cast<int>(heatShape[2]);
+    const int gridW = static_cast<int>(heatShape[3]);
+    if (batchIndex < 0 || batchIndex >= batch || classes <= 0 || gridH <= 0 || gridW <= 0)
+        return detections;
+    if (boxShape[0] != heatShape[0] || boxShape[1] != 4 || boxShape[2] != heatShape[2] || boxShape[3] != heatShape[3])
+        return detections;
+    if (offsetShape[0] != heatShape[0] || offsetShape[1] != 2 || offsetShape[2] != heatShape[2] || offsetShape[3] != heatShape[3])
+        return detections;
+
+    const float strideX = static_cast<float>(targetW) / static_cast<float>(gridW);
+    const float strideY = static_cast<float>(targetH) / static_cast<float>(gridH);
+    detections.reserve(static_cast<size_t>(std::max(config.max_detections, 16)));
+
+    for (int c = 0; c < classes; ++c)
+    {
+        for (int y = 0; y < gridH; ++y)
+        {
+            for (int x = 0; x < gridW; ++x)
+            {
+                const size_t heatIdx = nchwOffset(batchIndex, c, y, x, classes, gridH, gridW);
+                const float heatLogit = heat[heatIdx];
+                const float score = sigmoidFloat(heatLogit);
+                if (score <= confThreshold)
+                    continue;
+
+                bool isPeak = true;
+                for (int yy = std::max(0, y - 1); yy <= std::min(gridH - 1, y + 1) && isPeak; ++yy)
+                {
+                    for (int xx = std::max(0, x - 1); xx <= std::min(gridW - 1, x + 1); ++xx)
+                    {
+                        if (yy == y && xx == x)
+                            continue;
+                        const size_t neighborIdx = nchwOffset(batchIndex, c, yy, xx, classes, gridH, gridW);
+                        if (heat[neighborIdx] > heatLogit)
+                        {
+                            isPeak = false;
+                            break;
+                        }
+                    }
+                }
+                if (!isPeak)
+                    continue;
+
+                const float offX = sigmoidFloat(offset[nchwOffset(batchIndex, 0, y, x, 2, gridH, gridW)]);
+                const float offY = sigmoidFloat(offset[nchwOffset(batchIndex, 1, y, x, 2, gridH, gridW)]);
+                const float centerX = (static_cast<float>(x) + offX) * strideX;
+                const float centerY = (static_cast<float>(y) + offY) * strideY;
+
+                const float left = softplusFloat(box[nchwOffset(batchIndex, 0, y, x, 4, gridH, gridW)]) * strideX;
+                const float top = softplusFloat(box[nchwOffset(batchIndex, 1, y, x, 4, gridH, gridW)]) * strideY;
+                const float right = softplusFloat(box[nchwOffset(batchIndex, 2, y, x, 4, gridH, gridW)]) * strideX;
+                const float bottom = softplusFloat(box[nchwOffset(batchIndex, 3, y, x, 4, gridH, gridW)]) * strideY;
+
+                const float x1 = std::clamp(centerX - left, 0.0f, static_cast<float>(targetW));
+                const float y1 = std::clamp(centerY - top, 0.0f, static_cast<float>(targetH));
+                const float x2 = std::clamp(centerX + right, 0.0f, static_cast<float>(targetW));
+                const float y2 = std::clamp(centerY + bottom, 0.0f, static_cast<float>(targetH));
+                if (x2 <= x1 || y2 <= y1)
+                    continue;
+
+                cv::Rect rect;
+                rect.x = static_cast<int>(x1);
+                rect.y = static_cast<int>(y1);
+                rect.width = std::max(1, static_cast<int>(x2 - x1));
+                rect.height = std::max(1, static_cast<int>(y2 - y1));
+                detections.push_back(Detection{ rect, score, c });
+            }
+        }
+    }
+
+    if (config.max_detections > 0 && detections.size() > static_cast<size_t>(config.max_detections))
+    {
+        const auto kth = detections.begin() + config.max_detections;
+        std::nth_element(
+            detections.begin(),
+            kth,
+            detections.end(),
+            [](const Detection& a, const Detection& b) { return a.confidence > b.confidence; });
+        detections.resize(static_cast<size_t>(config.max_detections));
+    }
+
+    std::sort(
+        detections.begin(),
+        detections.end(),
+        [](const Detection& a, const Detection& b) { return a.confidence > b.confidence; });
+    NMS(detections, nmsThreshold, nmsTime);
+    return detections;
 }
 
 #ifdef USE_CUDA
@@ -193,7 +343,18 @@ void DirectMLDetector::initializeModel(const std::string& model_path)
     session = Ort::Session(env, model_path_wide.c_str(), session_options);
 
     input_name = session.GetInputNameAllocated(0, allocator).get();
-    output_name = session.GetOutputNameAllocated(0, allocator).get();
+    output_names.clear();
+    const size_t outputCount = session.GetOutputCount();
+    output_names.reserve(outputCount);
+    for (size_t i = 0; i < outputCount; ++i)
+    {
+        output_names.emplace_back(session.GetOutputNameAllocated(i, allocator).get());
+    }
+    output_name = output_names.empty() ? std::string() : output_names.front();
+    sunpoint_raw_output =
+        findOutputIndex(output_names, "heat") >= 0 &&
+        findOutputIndex(output_names, "box") >= 0 &&
+        findOutputIndex(output_names, "offset") >= 0;
 
     Ort::TypeInfo input_type_info = session.GetInputTypeInfo(0);
     auto input_tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
@@ -207,6 +368,14 @@ void DirectMLDetector::initializeModel(const std::string& model_path)
         config.fixed_input_size = isStatic;
         detector_model_changed.store(true);
         std::cout << "[DML] Automatically set fixed_input_size = " << (isStatic ? "true" : "false") << std::endl;
+    }
+
+    if (config.verbose)
+    {
+        std::cout << "[DML] Outputs:";
+        for (const auto& name : output_names)
+            std::cout << " " << name;
+        std::cout << (sunpoint_raw_output ? " (SunPoint raw)" : "") << std::endl;
     }
 }
 
@@ -302,13 +471,87 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
         ort_input_shape.data(), ort_input_shape.size());
 
     const char* input_names[] = { input_name.c_str() };
-    const char* output_names[] = { output_name.c_str() };
+    std::vector<const char*> output_name_ptrs;
+    output_name_ptrs.reserve(output_names.size());
+    for (const auto& name : output_names)
+        output_name_ptrs.push_back(name.c_str());
+    if (output_name_ptrs.empty())
+    {
+        std::cerr << "[DirectMLDetector] No output tensors are defined." << std::endl;
+        return empty;
+    }
 
     auto t2 = std::chrono::steady_clock::now();
     auto output_tensors = session.Run(Ort::RunOptions{ nullptr },
         input_names, &input_tensor, 1,
-        output_names, 1);
+        output_name_ptrs.data(), output_name_ptrs.size());
     auto t3 = std::chrono::steady_clock::now();
+
+    std::vector<std::vector<Detection>> batchDetections(batch_size);
+    float conf_thr = config.confidence_threshold;
+    float nms_thr = config.nms_threshold;
+
+    auto t4 = std::chrono::steady_clock::now();
+    std::chrono::duration<double, std::milli> nmsTimeTmp{ 0 };
+
+    if (sunpoint_raw_output)
+    {
+        const int heatIdx = findOutputIndex(output_names, "heat");
+        const int boxIdx = findOutputIndex(output_names, "box");
+        const int offsetIdx = findOutputIndex(output_names, "offset");
+        if (heatIdx < 0 || boxIdx < 0 || offsetIdx < 0)
+        {
+            std::cerr << "[DirectMLDetector] SunPoint raw outputs are missing." << std::endl;
+            return empty;
+        }
+
+        float* heatData = output_tensors[heatIdx].GetTensorMutableData<float>();
+        float* boxData = output_tensors[boxIdx].GetTensorMutableData<float>();
+        float* offsetData = output_tensors[offsetIdx].GetTensorMutableData<float>();
+        std::vector<int64_t> heatShape = output_tensors[heatIdx].GetTensorTypeAndShapeInfo().GetShape();
+        std::vector<int64_t> boxShape = output_tensors[boxIdx].GetTensorTypeAndShapeInfo().GetShape();
+        std::vector<int64_t> offsetShape = output_tensors[offsetIdx].GetTensorTypeAndShapeInfo().GetShape();
+
+        for (size_t b = 0; b < batch_size; ++b)
+        {
+            std::vector<Detection> detections = decodeSunPointRaw(
+                heatData,
+                heatShape,
+                boxData,
+                boxShape,
+                offsetData,
+                offsetShape,
+                static_cast<int>(b),
+                target_w,
+                target_h,
+                conf_thr,
+                nms_thr,
+                &nmsTimeTmp);
+
+            if (useFixed && (target_w != config.detection_resolution || target_h != config.detection_resolution))
+            {
+                float scaleX = static_cast<float>(config.detection_resolution) / target_w;
+                float scaleY = static_cast<float>(config.detection_resolution) / target_h;
+                for (auto& d : detections)
+                {
+                    d.box.x = static_cast<int>(d.box.x * scaleX);
+                    d.box.y = static_cast<int>(d.box.y * scaleY);
+                    d.box.width = static_cast<int>(d.box.width * scaleX);
+                    d.box.height = static_cast<int>(d.box.height * scaleY);
+                }
+            }
+
+            batchDetections[b] = std::move(detections);
+        }
+
+        auto t5 = std::chrono::steady_clock::now();
+        lastPreprocessTimeDML = t1 - t0;
+        lastInferenceTimeDML = t3 - t2;
+        lastCopyTimeDML = t4 - t3;
+        lastPostprocessTimeDML = t5 - t4;
+        lastNmsTimeDML = nmsTimeTmp;
+        return batchDetections;
+    }
 
     float* outData = output_tensors.front().GetTensorMutableData<float>();
     Ort::TensorTypeAndShapeInfo outInfo = output_tensors.front().GetTensorTypeAndShapeInfo();
@@ -327,13 +570,6 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
         return empty;
     }
     const int num_classes = rows - 4;
-
-    std::vector<std::vector<Detection>> batchDetections(batch_size);
-    float conf_thr = config.confidence_threshold;
-    float nms_thr = config.nms_threshold;
-
-    auto t4 = std::chrono::steady_clock::now();
-    std::chrono::duration<double, std::milli> nmsTimeTmp{ 0 };
 
     for (size_t b = 0; b < batch_size; ++b)
     {
@@ -371,6 +607,9 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
 
 int DirectMLDetector::getNumberOfClasses()
 {
+    if (sunpoint_raw_output)
+        return 2;
+
     Ort::TypeInfo output_type_info = session.GetOutputTypeInfo(0);
     auto tensor_info = output_type_info.GetTensorTypeAndShapeInfo();
     std::vector<int64_t> output_shape = tensor_info.GetShape();

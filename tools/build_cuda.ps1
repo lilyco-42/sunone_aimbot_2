@@ -32,7 +32,6 @@ try {
     Push-Location $repo
     $pushedLocation = $true
 
-    $opencvBuilt = Resolve-OptionalBoolean -Value $OpenCvAlreadyBuilt -Question "OpenCV already built for CUDA?" -Default $false -NonInteractive:$NonInteractive
     $allowDownloads = Resolve-OptionalBoolean -Value $DownloadOrUpdateNeeded -Question "Download or update needed files?" -Default $true -NonInteractive:$NonInteractive
 
     Import-VisualStudioEnvironment
@@ -111,6 +110,7 @@ try {
 
     $opencvCudaInstall = Resolve-RepoPath "sunone_aimbot_2\modules\opencv\build\cuda\install"
     $opencvLayout = Get-OpenCvWorldLayout -Root $opencvCudaInstall -Configuration $Configuration
+    $opencvBuilt = Resolve-OpenCvAlreadyBuilt -Value $OpenCvAlreadyBuilt -Backend "cuda" -Layout $opencvLayout -NonInteractive:$NonInteractive
     if (-not $opencvBuilt -or -not $opencvLayout) {
         if ($SkipOpenCvBuild) {
             throw "CUDA OpenCV layout is missing or invalid: $opencvCudaInstall"

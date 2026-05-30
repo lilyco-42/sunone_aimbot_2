@@ -29,7 +29,6 @@ try {
     Push-Location $repo
     $pushedLocation = $true
 
-    $opencvBuilt = Resolve-OptionalBoolean -Value $OpenCvAlreadyBuilt -Question "OpenCV already built for DML?" -Default $false -NonInteractive:$NonInteractive
     $allowDownloads = Resolve-OptionalBoolean -Value $DownloadOrUpdateNeeded -Question "Download or update needed files?" -Default $true -NonInteractive:$NonInteractive
 
     Import-VisualStudioEnvironment
@@ -39,6 +38,7 @@ try {
 
     $opencvDmlRoot = Resolve-RepoPath "sunone_aimbot_2\modules\opencv\build\dml"
     $opencvLayout = Get-OpenCvWorldLayout -Root $opencvDmlRoot -Configuration $Configuration
+    $opencvBuilt = Resolve-OpenCvAlreadyBuilt -Value $OpenCvAlreadyBuilt -Backend "dml" -Layout $opencvLayout -NonInteractive:$NonInteractive
     if (-not $opencvBuilt -or -not $opencvLayout) {
         if (-not $allowDownloads) {
             throw "DML OpenCV is not prepared. Re-run with download/update enabled so the prebuilt package can be downloaded."
