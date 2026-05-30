@@ -216,17 +216,30 @@ std::vector<Detection> postProcessYoloDML(
         return detections;
     }
 
-    cv::Mat det_output(rows_i, cols_i, CV_32F, (void*)output);
-    for (int i = 0; i < cols_i; ++i) {
-        cv::Mat classes_scores = det_output.col(i).rowRange(4, 4 + numClasses);
-        cv::Point class_id_point;
-        double score;
-        cv::minMaxLoc(classes_scores, nullptr, &score, nullptr, &class_id_point);
-        if (score > confThreshold) {
-            float cx = det_output.at<float>(0, i);
-            float cy = det_output.at<float>(1, i);
-            float ow = det_output.at<float>(2, i);
-            float oh = det_output.at<float>(3, i);
+    if (numClasses <= 0 || rows_i < 4 + numClasses)
+        return detections;
+
+    detections.reserve(256);
+    for (int i = 0; i < cols_i; ++i)
+    {
+        float maxScore = output[4 * cols_i + i];
+        int maxClassId = 0;
+        for (int c = 1; c < numClasses; ++c)
+        {
+            const float score = output[(4 + c) * cols_i + i];
+            if (score > maxScore)
+            {
+                maxScore = score;
+                maxClassId = c;
+            }
+        }
+
+        if (maxScore > confThreshold)
+        {
+            float cx = output[i];
+            float cy = output[cols_i + i];
+            float ow = output[2 * cols_i + i];
+            float oh = output[3 * cols_i + i];
             const float half_ow = 0.5f * ow;
             const float half_oh = 0.5f * oh;
             cv::Rect box;
@@ -234,7 +247,7 @@ std::vector<Detection> postProcessYoloDML(
             box.y = static_cast<int>(cy - half_oh);
             box.width = static_cast<int>(ow);
             box.height = static_cast<int>(oh);
-            detections.push_back(Detection{ box, static_cast<float>(score), class_id_point.y });
+            detections.push_back(Detection{ box, maxScore, maxClassId });
         }
     }
     if (!detections.empty())

@@ -244,6 +244,25 @@ matching wrapper and run `ai.exe` from the output folder. Prefer a real DML or
 CUDA smoke test over static source-shape checks, because the architecture changes
 often.
 
+For repeatable ONNX Runtime provider timings, run the provider benchmark from
+the output folder:
+
+```powershell
+.\ai.exe --benchmark-providers
+.\ai.exe --benchmark-providers cpu,dml-gpu --bench-runs 200 --bench-warmup 20
+```
+
+The benchmark prints a final CSV-style summary in seconds and does not write a
+log file. In CUDA builds, the `cuda` provider uses the existing TensorRT
+`.engine` path; pass `--bench-cuda-model` if the same-stem engine is not beside
+the selected ONNX model. Results are appended to
+`benchmark_results\provider_benchmark.csv` under the repository root by default,
+even when `ai.exe` is launched from `build\cuda\Release` or `build\dml\Release`.
+Use `--bench-no-save` for console-only runs or `--bench-results <path>` for a
+different CSV path. In the CSV, `onnx_model` is the model used by CPU/DML,
+`cuda_engine_model` is the matching TensorRT engine when present, and
+`provider_model` is the actual model used by that provider.
+
 ## 11. Troubleshooting
 
 | Problem | What to check |

@@ -197,6 +197,7 @@ endif()
 set(SRC_DIR "${CMAKE_SOURCE_DIR}/sunone_aimbot_2")
 
 set(AIMBOT_SOURCES
+    "${SRC_DIR}/benchmarks/provider_benchmark.cpp"
     "${SRC_DIR}/capture/capture.cpp"
     "${SRC_DIR}/capture/duplication_api_capture.cpp"
     "${SRC_DIR}/capture/udp_capture.cpp"
@@ -307,6 +308,7 @@ endif()
 
 target_include_directories(ai PRIVATE
     "${SRC_DIR}"
+    "${SRC_DIR}/benchmarks"
     "${SRC_DIR}/capture"
     "${SRC_DIR}/config"
     "${SRC_DIR}/depth"
@@ -388,6 +390,17 @@ target_link_libraries(ai PRIVATE
     setupapi
     WindowsApp
 )
+
+if(NOT AIMBOT_DIRECTML_DIR STREQUAL "" AND
+   EXISTS "${AIMBOT_DIRECTML_DIR}/include/DirectML.h" AND
+   EXISTS "${AIMBOT_DIRECTML_DIR}/bin/x64-win/DirectML.lib")
+    target_include_directories(ai PRIVATE "${AIMBOT_DIRECTML_DIR}/include")
+    target_link_libraries(ai PRIVATE
+        d3d12
+        "${AIMBOT_DIRECTML_DIR}/bin/x64-win/DirectML.lib"
+    )
+    target_compile_definitions(ai PRIVATE AIMBOT_HAS_DIRECTML_EX)
+endif()
 
 if(AIMBOT_USE_CUDA)
     find_package(CUDAToolkit REQUIRED)

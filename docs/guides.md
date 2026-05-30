@@ -289,6 +289,21 @@ collect_data_while_playing = false
 
 Then check `[CaptureDiag]` output.
 
+### Provider Benchmark
+
+Use this when you want a repeatable ONNX Runtime provider comparison without starting capture, overlay, input devices, or file logging:
+
+```powershell
+.\ai.exe --benchmark-providers
+.\ai.exe --benchmark-providers cpu,dml-gpu --bench-runs 200 --bench-warmup 20
+.\ai.exe --benchmark-providers dml-gpu,dml-cpu --bench-model models\your_model.onnx
+.\ai.exe --benchmark-providers cuda --bench-model models\your_model.onnx --bench-cuda-model models\your_model.engine
+```
+
+The benchmark prints one final CSV-style summary in seconds. Providers are `cpu`, `cuda`, `dml-gpu`, and `dml-cpu`; `cuda` uses the TensorRT engine path in CUDA builds, and `dml-cpu` uses DirectML through the WARP software adapter. If no model is passed, the benchmark skips ONNX candidates that cannot initialize on the requested available providers.
+
+Each benchmark run appends rows to `benchmark_results\provider_benchmark.csv` under the repository root with the commit id, dirty flag, `model_family`, `onnx_model`, `cuda_engine_model`, `provider_model`, provider, and timing data. For `cuda`, `provider_model` is the `.engine` actually used by TensorRT. Use `--bench-no-save` for a disposable run.
+
 ### Razer Control Test
 
 ```ini

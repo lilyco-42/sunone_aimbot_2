@@ -31,6 +31,7 @@
 #include "mem/gpu_resource_manager.h"
 #include "mem/cpu_affinity_manager.h"
 #include "runtime/thread_loops.h"
+#include "benchmarks/provider_benchmark.h"
 
 #ifdef USE_CUDA
 #include "depth/depth_anything_trt.h"
@@ -85,6 +86,22 @@ static int FatalExit(const std::string& message)
     std::cout << "Press Enter to exit...";
     std::cin.get();
     return -1;
+}
+
+static void SetWorkingDirectoryToExecutable()
+{
+    wchar_t exePath[MAX_PATH]{};
+    if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0)
+    {
+        std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
+        std::error_code ec;
+        std::filesystem::current_path(exeDir, ec);
+        if (ec && config.verbose)
+        {
+            std::cout << "[Config] Failed to set working dir: " << exeDir.u8string()
+                      << " (" << ec.message() << ")" << std::endl;
+        }
+    }
 }
 
 static bool SelectCompatibleAiModel()
@@ -218,25 +235,16 @@ void assignInputDevices()
 }
 
 
-int main()
+int main(int argc, char** argv)
 {
     SetConsoleOutputCP(CP_UTF8);
     SetRandomConsoleTitle();
     cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_FATAL);
+    SetWorkingDirectoryToExecutable();
 
+    if (benchmarks::IsProviderBenchmarkRequested(argc, argv))
     {
-        wchar_t exePath[MAX_PATH]{};
-        if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0)
-        {
-            std::filesystem::path exeDir = std::filesystem::path(exePath).parent_path();
-            std::error_code ec;
-            std::filesystem::current_path(exeDir, ec);
-            if (ec && config.verbose)
-            {
-                std::cout << "[Config] Failed to set working dir: " << exeDir.u8string()
-                          << " (" << ec.message() << ")" << std::endl;
-            }
-        }
+        return benchmarks::RunProviderBenchmarkCli(argc, argv);
     }
 
     if (!config.loadConfig())

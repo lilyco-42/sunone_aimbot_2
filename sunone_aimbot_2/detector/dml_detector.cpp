@@ -362,14 +362,36 @@ void DirectMLDetector::initializeModel(const std::string& model_path)
         output_names.emplace_back(session.GetOutputNameAllocated(i, allocator).get());
     }
     output_name = output_names.empty() ? std::string() : output_names.front();
+    output_name_ptrs.clear();
+    output_name_ptrs.reserve(output_names.size());
+    for (const auto& name : output_names)
+        output_name_ptrs.push_back(name.c_str());
+
+    heat_output_index = findOutputIndex(output_names, "heat");
+    box_output_index = findOutputIndex(output_names, "box");
+    offset_output_index = findOutputIndex(output_names, "offset");
     sunpoint_raw_output =
-        findOutputIndex(output_names, "heat") >= 0 &&
-        findOutputIndex(output_names, "box") >= 0 &&
-        findOutputIndex(output_names, "offset") >= 0;
+        heat_output_index >= 0 &&
+        box_output_index >= 0 &&
+        offset_output_index >= 0;
 
     Ort::TypeInfo input_type_info = session.GetInputTypeInfo(0);
     auto input_tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
     input_shape = input_tensor_info.GetShape();
+    model_input_h = -1;
+    model_input_w = -1;
+    if (input_shape.size() > 2)
+    {
+        int converted = 0;
+        if (tryInt64ToInt(input_shape[2], &converted))
+            model_input_h = converted;
+    }
+    if (input_shape.size() > 3)
+    {
+        int converted = 0;
+        if (tryInt64ToInt(input_shape[3], &converted))
+            model_input_w = converted;
+    }
 
     bool isStatic = true;
     for (auto d : input_shape) if (d <= 0) isStatic = false;
@@ -390,6 +412,87 @@ void DirectMLDetector::initializeModel(const std::string& model_path)
     }
 }
 
+void DirectMLDetector::preprocessFrameToTensor(const cv::Mat& frame, float* dst, int target_w, int target_h)
+{
+    if (!dst || target_w <= 0 || target_h <= 0)
+        return;
+
+    const size_t channelSize = static_cast<size_t>(target_w) * static_cast<size_t>(target_h);
+    cv::Mat rgbPlanes[3] = {
+        cv::Mat(target_h, target_w, CV_32F, dst),
+        cv::Mat(target_h, target_w, CV_32F, dst + channelSize),
+        cv::Mat(target_h, target_w, CV_32F, dst + channelSize * 2)
+    };
+
+    auto clearTensor = [&]()
+    {
+        rgbPlanes[0].setTo(0.0f);
+        rgbPlanes[1].setTo(0.0f);
+        rgbPlanes[2].setTo(0.0f);
+    };
+
+    if (frame.empty())
+    {
+        clearTensor();
+        return;
+    }
+
+    if (frame.channels() == 1)
+    {
+        cv::Mat grayResized;
+        if (frame.cols != target_w || frame.rows != target_h)
+        {
+            cv::resize(frame, preprocessGrayResizeBuffer, cv::Size(target_w, target_h), 0, 0, cv::INTER_LINEAR);
+            grayResized = preprocessGrayResizeBuffer;
+        }
+        else
+        {
+            grayResized = frame;
+        }
+
+        grayResized.convertTo(preprocessGrayFloatBuffer, CV_32F, 1.0f / 255.0f);
+        preprocessGrayFloatBuffer.copyTo(rgbPlanes[0]);
+        preprocessGrayFloatBuffer.copyTo(rgbPlanes[1]);
+        preprocessGrayFloatBuffer.copyTo(rgbPlanes[2]);
+        return;
+    }
+
+    cv::Mat bgrFrame;
+    switch (frame.channels())
+    {
+    case 4:
+        cv::cvtColor(frame, preprocessBgrBuffer, cv::COLOR_BGRA2BGR);
+        bgrFrame = preprocessBgrBuffer;
+        break;
+    case 3:
+        bgrFrame = frame;
+        break;
+    default:
+        clearTensor();
+        return;
+    }
+
+    cv::Mat resizedBgr;
+    if (bgrFrame.cols != target_w || bgrFrame.rows != target_h)
+    {
+        cv::resize(bgrFrame, preprocessResizeBuffer, cv::Size(target_w, target_h), 0, 0, cv::INTER_LINEAR);
+        resizedBgr = preprocessResizeBuffer;
+    }
+    else
+    {
+        resizedBgr = bgrFrame;
+    }
+
+    resizedBgr.convertTo(preprocessFloatBuffer, CV_32FC3, 1.0f / 255.0f);
+
+    cv::Mat bgrToRgbPlanes[3] = {
+        rgbPlanes[2],
+        rgbPlanes[1],
+        rgbPlanes[0]
+    };
+    cv::split(preprocessFloatBuffer, bgrToRgbPlanes);
+}
+
 std::vector<Detection> DirectMLDetector::detect(const cv::Mat& input_frame)
 {
     std::vector<cv::Mat> batch = { input_frame };
@@ -406,68 +509,22 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
     if (frames.empty()) return empty;
     const size_t batch_size = frames.size();
 
-    int model_h = -1;
-    int model_w = -1;
-    if (input_shape.size() > 2)
-    {
-        int converted = 0;
-        if (tryInt64ToInt(input_shape[2], &converted))
-        {
-            model_h = converted;
-        }
-    }
-    if (input_shape.size() > 3)
-    {
-        int converted = 0;
-        if (tryInt64ToInt(input_shape[3], &converted))
-        {
-            model_w = converted;
-        }
-    }
+    const int model_h = model_input_h;
+    const int model_w = model_input_w;
     const bool useFixed = config.fixed_input_size && model_h > 0 && model_w > 0;
 
     const int target_h = useFixed ? model_h : config.detection_resolution;
     const int target_w = useFixed ? model_w : config.detection_resolution;
 
     auto t0 = std::chrono::steady_clock::now();
-    std::vector<float> input_tensor_values(
-        batch_size * static_cast<size_t>(3) * static_cast<size_t>(target_h) * static_cast<size_t>(target_w));
+    const size_t frameTensorSize =
+        static_cast<size_t>(3) * static_cast<size_t>(target_h) * static_cast<size_t>(target_w);
+    input_tensor_values.resize(batch_size * frameTensorSize);
 
     for (size_t b = 0; b < batch_size; ++b)
     {
-        cv::Mat bgrFrame;
-        switch (frames[b].channels())
-        {
-        case 4:
-            cv::cvtColor(frames[b], bgrFrame, cv::COLOR_BGRA2BGR);
-            break;
-        case 3:
-            bgrFrame = frames[b];
-            break;
-        case 1:
-            cv::cvtColor(frames[b], bgrFrame, cv::COLOR_GRAY2BGR);
-            break;
-        default:
-            bgrFrame = cv::Mat::zeros(frames[b].size(), CV_8UC3);
-            break;
-        }
-
-        cv::Mat resized;
-        cv::resize(bgrFrame, resized, cv::Size(target_w, target_h));
-        cv::cvtColor(resized, resized, cv::COLOR_BGR2RGB);
-        resized.convertTo(resized, CV_32FC3, 1.0f / 255.0f);
-
-        const float* src = reinterpret_cast<const float*>(resized.data);
-        for (int h = 0; h < target_h; ++h)
-            for (int w = 0; w < target_w; ++w)
-                for (int c = 0; c < 3; ++c)
-                {
-                    size_t dstIdx = b * static_cast<size_t>(3) * static_cast<size_t>(target_h) * static_cast<size_t>(target_w)
-                        + static_cast<size_t>(c) * static_cast<size_t>(target_h) * static_cast<size_t>(target_w)
-                        + static_cast<size_t>(h) * static_cast<size_t>(target_w)
-                        + static_cast<size_t>(w);
-                    input_tensor_values[dstIdx] = src[(h * target_w + w) * 3 + c];
-                }
+        float* dst = input_tensor_values.data() + b * frameTensorSize;
+        preprocessFrameToTensor(frames[b], dst, target_w, target_h);
     }
     auto t1 = std::chrono::steady_clock::now();
 
@@ -482,10 +539,6 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
         ort_input_shape.data(), ort_input_shape.size());
 
     const char* input_names[] = { input_name.c_str() };
-    std::vector<const char*> output_name_ptrs;
-    output_name_ptrs.reserve(output_names.size());
-    for (const auto& name : output_names)
-        output_name_ptrs.push_back(name.c_str());
     if (output_name_ptrs.empty())
     {
         std::cerr << "[DirectMLDetector] No output tensors are defined." << std::endl;
@@ -507,9 +560,9 @@ std::vector<std::vector<Detection>> DirectMLDetector::detectBatch(const std::vec
 
     if (sunpoint_raw_output)
     {
-        const int heatIdx = findOutputIndex(output_names, "heat");
-        const int boxIdx = findOutputIndex(output_names, "box");
-        const int offsetIdx = findOutputIndex(output_names, "offset");
+        const int heatIdx = heat_output_index;
+        const int boxIdx = box_output_index;
+        const int offsetIdx = offset_output_index;
         if (heatIdx < 0 || boxIdx < 0 || offsetIdx < 0)
         {
             std::cerr << "[DirectMLDetector] SunPoint raw outputs are missing." << std::endl;

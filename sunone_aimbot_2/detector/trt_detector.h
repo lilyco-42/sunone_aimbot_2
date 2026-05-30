@@ -34,6 +34,8 @@ public:
         std::chrono::steady_clock::time_point frameTimestamp = {});
     void inferenceThread();
     void requestStop();
+    bool isInitialized() const;
+    std::vector<Detection> detect(const cv::Mat& frame);
 
     float img_scale;
 
@@ -87,7 +89,7 @@ private:
 
     void preProcess(const cv::Mat& frame);
     void preProcess(const cv::cuda::GpuMat& frame);
-    void copyCpuTensorToDevice(const cv::Mat& rgbFloatFrame, int width, int height, void* inputBuffer);
+    void copyCpuTensorToDevice(const cv::Mat& bgrFloatFrame, int width, int height, void* inputBuffer);
 
     cv::cuda::GpuMat gpuFrameBuffer;
     cv::cuda::GpuMat gpuResizedBuffer;
@@ -96,7 +98,6 @@ private:
 
     cv::Mat cpuBgrBuffer;
     cv::Mat cpuResizedBuffer;
-    cv::Mat cpuRgbBuffer;
     cv::Mat cpuFloatBuffer;
     std::vector<float> inputHostBuffer;
 

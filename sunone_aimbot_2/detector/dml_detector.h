@@ -43,8 +43,21 @@ private:
     std::string input_name;
     std::string output_name;
     std::vector<std::string> output_names;
+    std::vector<const char*> output_name_ptrs;
     std::vector<int64_t> input_shape;
     bool sunpoint_raw_output = false;
+    int heat_output_index = -1;
+    int box_output_index = -1;
+    int offset_output_index = -1;
+    int model_input_h = -1;
+    int model_input_w = -1;
+
+    std::vector<float> input_tensor_values;
+    cv::Mat preprocessBgrBuffer;
+    cv::Mat preprocessResizeBuffer;
+    cv::Mat preprocessFloatBuffer;
+    cv::Mat preprocessGrayResizeBuffer;
+    cv::Mat preprocessGrayFloatBuffer;
 
     std::mutex inferenceMutex;
     cv::Mat currentFrame;
@@ -53,6 +66,7 @@ private:
     bool frameReady = false;
 
     void initializeModel(const std::string& model_path);
+    void preprocessFrameToTensor(const cv::Mat& frame, float* dst, int target_w, int target_h);
     Ort::MemoryInfo memory_info;
 };
 
