@@ -5,6 +5,7 @@
 
 #include <string.h>
 #include <algorithm>
+#include <vector>
 
 #include <imgui/imgui.h>
 #include "imgui/imgui_internal.h"
@@ -23,10 +24,55 @@ bool disable_winrt_futures = checkwin1903();
 int monitors = get_active_monitors();
 
 static std::vector<std::string> virtual_cameras;
+static std::vector<CaptureWindowInfo> capture_windows;
 static char virtual_camera_filter_buf[128] = "";
+static char capture_window_filter_buf[128] = "";
 static char udp_ip_buf[64] = "";
 static int udp_port_buf = 1234;
+static bool capture_windows_loaded = false;
 static bool udp_settings_init = false;
+
+static void requestWinrtCaptureRestart()
+{
+    capture_method_changed.store(true);
+    capture_window_changed.store(true);
+}
+
+static void refreshCaptureWindowList()
+{
+    capture_windows = EnumerateCaptureWindows();
+    capture_windows_loaded = true;
+}
+
+static bool captureWindowMatchesTitle(const CaptureWindowInfo& window, const std::string& title)
+{
+    const std::string needle = OtherTools::TrimAscii(title);
+    if (needle.empty())
+        return false;
+
+    return window.title == needle ||
+        window.title.find(needle) != std::string::npos ||
+        OtherTools::ContainsCaseInsensitive(window.title, needle);
+}
+
+static bool currentWindowTitleIsInList()
+{
+    for (const auto& window : capture_windows)
+        if (captureWindowMatchesTitle(window, config.capture_window_title))
+            return true;
+    return false;
+}
+
+static void applyWinrtWindowTarget(const std::string& title)
+{
+    if (config.capture_window_title != title)
+    {
+        config.capture_window_title = title;
+        OverlayConfig_MarkDirty();
+    }
+
+    requestWinrtCaptureRestart();
+}
 
 void ensureVirtualCamerasLoaded()
 {
@@ -185,8 +231,7 @@ void draw_capture_settings()
                     {
                         config.capture_target = targetOptions[currentTargetIndex];
                         OverlayConfig_MarkDirty();
-                        capture_method_changed.store(true);
-                        capture_window_changed.store(true);
+                        requestWinrtCaptureRestart();
                     }
                     OverlayUI::EndSettingRow(row);
                 }
@@ -194,50 +239,64 @@ void draw_capture_settings()
 
             if (config.capture_target == "window")
             {
-                ImGui::Separator();
-                ImGui::TextUnformatted("Window Target");
-
-                static bool initTitle = false;
-                static char titleBuf[256];
-                if (!initTitle)
-                {
-                    memset(titleBuf, 0, sizeof(titleBuf));
-                    std::string t = config.capture_window_title;
-                    if (t.size() >= sizeof(titleBuf)) t = t.substr(0, sizeof(titleBuf) - 1);
-                    memcpy(titleBuf, t.c_str(), t.size());
-                    initTitle = true;
-                }
+                if (!capture_windows_loaded)
+                    refreshCaptureWindowList();
 
                 {
-                    const auto row = OverlayUI::BeginSettingRow("Window title contains");
-                    ImGui::InputText("##value", titleBuf, IM_ARRAYSIZE(titleBuf));
+                    const auto row = OverlayUI::BeginSettingRow("Window filter");
+                    ImGui::InputText("##value", capture_window_filter_buf, IM_ARRAYSIZE(capture_window_filter_buf));
                     OverlayUI::EndSettingRow(row);
                 }
+
+                const std::string filterLower = OtherTools::ToLowerAscii(capture_window_filter_buf);
+                std::vector<int> filteredWindowIndices;
+                filteredWindowIndices.reserve(capture_windows.size());
+                for (int i = 0; i < static_cast<int>(capture_windows.size()); ++i)
                 {
-                    const auto row = OverlayUI::BeginSettingRow("Window tools");
-                    if (ImGui::Button("Use Active Window", ImVec2(row.controlWidth, 0.0f)))
+                    const std::string displayLower = OtherTools::ToLowerAscii(capture_windows[i].displayName);
+                    if (filterLower.empty() || displayLower.find(filterLower) != std::string::npos)
+                        filteredWindowIndices.push_back(i);
+                }
+
+                if (!filteredWindowIndices.empty())
+                {
+                    const std::string preview = config.capture_window_title.empty()
+                        ? std::string("Select window")
+                        : config.capture_window_title;
+
+                    const auto row = OverlayUI::BeginSettingRow("Window");
+                    if (ImGui::BeginCombo("##value", preview.c_str()))
                     {
-                        wchar_t wbuf[512]{};
-                        HWND fg = ::GetForegroundWindow();
-                        if (fg && ::GetWindowTextW(fg, wbuf, (int)std::size(wbuf)) > 0)
+                        for (int index : filteredWindowIndices)
                         {
-                            std::wstring ws(wbuf);
-                            std::string s = WideToUtf8(ws);
-                            memset(titleBuf, 0, sizeof(titleBuf));
-                            auto copy = s.substr(0, sizeof(titleBuf) - 1);
-                            memcpy(titleBuf, copy.c_str(), copy.size());
+                            const CaptureWindowInfo& window = capture_windows[index];
+                            const bool selected = captureWindowMatchesTitle(window, config.capture_window_title);
+
+                            ImGui::PushID(window.hwnd);
+                            if (ImGui::Selectable(window.displayName.c_str(), selected))
+                            {
+                                applyWinrtWindowTarget(window.title);
+                            }
+                            if (selected)
+                                ImGui::SetItemDefaultFocus();
+                            ImGui::PopID();
                         }
+                        ImGui::EndCombo();
                     }
                     OverlayUI::EndSettingRow(row);
                 }
+                else
                 {
-                    const auto row = OverlayUI::BeginSettingRow("Apply target");
-                    if (ImGui::Button("Apply Window Target", ImVec2(row.controlWidth, 0.0f)))
+                    OverlayUI::TextRow("No matching windows", IM_COL32(188, 188, 188, 255));
+                }
+
+                {
+                    const auto row = OverlayUI::BeginSettingRow("Window list");
+                    if (ImGui::Button("Refresh", ImVec2(row.controlWidth, 0.0f)))
                     {
-                        config.capture_window_title = titleBuf;
-                        OverlayConfig_MarkDirty();
-                        capture_method_changed.store(true);
-                        capture_window_changed.store(true);
+                        refreshCaptureWindowList();
+                        if (currentWindowTitleIsInList())
+                            requestWinrtCaptureRestart();
                     }
                     OverlayUI::EndSettingRow(row);
                 }

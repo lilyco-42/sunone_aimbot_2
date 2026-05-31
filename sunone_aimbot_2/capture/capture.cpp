@@ -281,6 +281,22 @@ std::string NormalizeCaptureMethod(const std::string& method)
     return "duplication_api";
 }
 
+bool IsWinrtWindowTarget(const CaptureThreadConfig& cfg)
+{
+    return NormalizeCaptureMethod(cfg.capture_method) == "winrt" && cfg.capture_target == "window";
+}
+
+bool IsWinrtWindowTargetMissing(const CaptureThreadConfig& cfg)
+{
+    if (!IsWinrtWindowTarget(cfg))
+        return false;
+
+    if (OtherTools::TrimAscii(cfg.capture_window_title).empty())
+        return true;
+
+    return FindCaptureWindowByTitle(cfg.capture_window_title) == nullptr;
+}
+
 class TimerResolutionGuard
 {
 public:
@@ -543,6 +559,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
         publishCaptureSourceSize(capturer.get());
         std::string activeCapturerMethod = capturer ? desiredCaptureMethod : std::string();
         auto lastCapturerCreateAttempt = std::chrono::steady_clock::now();
+        bool waitingForWinrtWindowTarget = !capturer && IsWinrtWindowTargetMissing(currentCfg);
 
         auto clearCaptureFrames = [&]()
         {
@@ -649,6 +666,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             if (needsReinit)
             {
                 setCaptureUnavailable();
+                waitingForWinrtWindowTarget = false;
 
                 if (currentCfg.detection_resolution > 0)
                 {
@@ -681,7 +699,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 if (capturer)
                     activeCapturerMethod = nextMethod;
                 else
+                {
                     activeCapturerMethod.clear();
+                    waitingForWinrtWindowTarget = IsWinrtWindowTargetMissing(currentCfg);
+                }
 
                 lastCapturerCreateAttempt = std::chrono::steady_clock::now();
                 if (currentCfg.verbose)
@@ -690,6 +711,15 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             if (!capturer)
             {
+                if (waitingForWinrtWindowTarget && IsWinrtWindowTarget(currentCfg))
+                {
+                    setCaptureUnavailable();
+                    if (!frameDuration.has_value())
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    applyFrameLimiter();
+                    continue;
+                }
+
                 const auto now = std::chrono::steady_clock::now();
                 if (now - lastCapturerCreateAttempt >= std::chrono::seconds(1))
                 {
@@ -705,6 +735,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
                     if (capturer)
                     {
+                        waitingForWinrtWindowTarget = false;
                         activeCapturerMethod = desiredCaptureMethod;
                         lastSuccessfulFrameTime = now;
                         if (currentCfg.verbose)
@@ -713,6 +744,7 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     else
                     {
                         activeCapturerMethod.clear();
+                        waitingForWinrtWindowTarget = IsWinrtWindowTargetMissing(currentCfg);
                     }
                 }
 

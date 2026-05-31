@@ -13,8 +13,6 @@
 #include "sunone_aimbot_2.h"
 #include "other_tools.h"
 
-#include <dwmapi.h>
-
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
@@ -43,30 +41,9 @@ winrt::com_ptr<IGraphicsCaptureItemInterop> GetInteropFactory()
     return s_factory;
 }
 
-HWND WinRTScreenCapture::FindWindowByTitleSubstring(const std::wstring& title_substr)
+HWND WinRTScreenCapture::FindWindowByTitleSubstring(const std::string& title_substr)
 {
-    struct SearchData { const std::wstring* substr; HWND found = nullptr; };
-    SearchData data{ &title_substr, nullptr };
-
-    ::EnumWindows([](HWND hWnd, LPARAM lParam) -> BOOL {
-        auto* d = reinterpret_cast<SearchData*>(lParam);
-        if (!::IsWindowVisible(hWnd)) return TRUE;
-        BOOL isCloaked = FALSE;
-        DwmGetWindowAttribute(hWnd, DWMWA_CLOAKED, &isCloaked, sizeof(isCloaked));
-        if (isCloaked) return TRUE;
-
-        wchar_t buf[512]{};
-        ::GetWindowTextW(hWnd, buf, static_cast<int>(std::size(buf)));
-        if (buf[0] == L'\0') return TRUE;
-        std::wstring title(buf);
-        if (title.find(*d->substr) != std::wstring::npos) {
-            d->found = hWnd;
-            return FALSE;
-        }
-        return TRUE;
-    }, reinterpret_cast<LPARAM>(&data));
-
-    return data.found;
+    return FindCaptureWindowByTitle(title_substr);
 }
 
 WinRTScreenCapture::WinRTScreenCapture(int desiredWidth, int desiredHeight, const Options& options)
@@ -113,8 +90,7 @@ WinRTScreenCapture::WinRTScreenCapture(int desiredWidth, int desiredHeight, cons
         {
             throw std::runtime_error("[WinRTCapture] capture_target=window but capture_window_title is empty.");
         }
-        std::wstring wtitle(options.windowTitle.begin(), options.windowTitle.end());
-        HWND hwnd = FindWindowByTitleSubstring(wtitle);
+        HWND hwnd = FindWindowByTitleSubstring(options.windowTitle);
         if (!hwnd)
         {
             throw std::runtime_error("[WinRTCapture] Target window not found by title substring: " + options.windowTitle);

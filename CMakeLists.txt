@@ -386,6 +386,7 @@ target_link_libraries(ai PRIVATE
     "${AIMBOT_ONNXRUNTIME_DIR}/runtimes/win-x64/native/onnxruntime.lib"
     d3d11
     dxgi
+    dwmapi
     d2d1
     setupapi
     WindowsApp

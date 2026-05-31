@@ -78,7 +78,7 @@ private:
     winrt::com_ptr<T> GetDXGIInterfaceFromObject(
         winrt::Windows::Foundation::IInspectable const& object);
 
-    static HWND FindWindowByTitleSubstring(const std::wstring& title_substr);
+    static HWND FindWindowByTitleSubstring(const std::string& title_substr);
 };
 
 #endif // WINRT_CAPTURE_H

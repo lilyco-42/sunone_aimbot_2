@@ -5,6 +5,14 @@
 #include <vector>
 #include <d3d11.h>
 
+struct CaptureWindowInfo
+{
+    HWND hwnd = nullptr;
+    std::string title;
+    std::string displayName;
+    bool minimized = false;
+};
+
 namespace OtherTools
 {
 inline int MaxInt(int a, int b) noexcept
@@ -42,6 +50,8 @@ HMONITOR GetMonitorHandleByIndex(int monitorIndex);
 double GetMonitorRefreshRateByIndex(int monitorIndex);
 void SetRandomConsoleTitle();
 bool IsValidImageFile(const std::wstring& wpath, UINT& outW, UINT& outH, std::string& outErr);
+std::vector<CaptureWindowInfo> EnumerateCaptureWindows();
+HWND FindCaptureWindowByTitle(const std::string& title);
 
 std::vector<std::string> getAvailableModels();
 

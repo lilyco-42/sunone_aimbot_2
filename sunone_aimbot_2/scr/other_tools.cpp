@@ -5,6 +5,7 @@
 #include <string>
 #include <iostream>
 #include <cctype>
+#include <cstdio>
 #include <cstdint>
 #include <cwchar>
 #include <filesystem>
@@ -13,9 +14,11 @@
 #include <fstream>
 #include <random>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include <d3d11.h>
+#include <dwmapi.h>
 #include <dxgi.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -31,6 +34,7 @@
 #include "config.h"
 #include "sunone_aimbot_2.h"
 
+#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "windowscodecs.lib")
 
 using Microsoft::WRL::ComPtr;
@@ -207,6 +211,109 @@ std::string WideToUtf8(const std::wstring& ws)
     WideCharToMultiByte(CP_UTF8, 0, ws.data(), static_cast<int>(ws.size()),
         out.data(), len, nullptr, nullptr);
     return out;
+}
+
+static std::string GetWindowProcessName(HWND hwnd)
+{
+    DWORD processId = 0;
+    GetWindowThreadProcessId(hwnd, &processId);
+    if (processId == 0)
+        return {};
+
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process)
+        return {};
+
+    wchar_t imagePath[MAX_PATH]{};
+    DWORD imagePathLen = MAX_PATH;
+    const BOOL ok = QueryFullProcessImageNameW(process, 0, imagePath, &imagePathLen);
+    CloseHandle(process);
+
+    if (!ok || imagePathLen == 0)
+        return {};
+
+    std::filesystem::path path(std::wstring(imagePath, imagePathLen));
+    return WideToUtf8(path.filename().wstring());
+}
+
+static std::string MakeCaptureWindowDisplayName(HWND hwnd, const std::string& title, bool minimized)
+{
+    std::string display = title;
+
+    const std::string processName = GetWindowProcessName(hwnd);
+    if (!processName.empty())
+        display += " - " + processName;
+
+    if (minimized)
+        display += " [minimized]";
+
+    char hwndText[32]{};
+    std::snprintf(hwndText, sizeof(hwndText), "%p", reinterpret_cast<void*>(hwnd));
+    display += " [" + std::string(hwndText) + "]";
+
+    return display;
+}
+
+std::vector<CaptureWindowInfo> EnumerateCaptureWindows()
+{
+    std::vector<CaptureWindowInfo> windows;
+
+    ::EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+        auto* out = reinterpret_cast<std::vector<CaptureWindowInfo>*>(lParam);
+        if (!out || !::IsWindowVisible(hwnd))
+            return TRUE;
+
+        BOOL isCloaked = FALSE;
+        if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &isCloaked, sizeof(isCloaked))) && isCloaked)
+            return TRUE;
+
+        const int titleLength = ::GetWindowTextLengthW(hwnd);
+        if (titleLength <= 0)
+            return TRUE;
+
+        std::vector<wchar_t> titleBuffer(static_cast<size_t>(titleLength) + 1);
+        const int copied = ::GetWindowTextW(hwnd, titleBuffer.data(), static_cast<int>(titleBuffer.size()));
+        if (copied <= 0)
+            return TRUE;
+
+        const std::string title = OtherTools::TrimAscii(WideToUtf8(std::wstring(titleBuffer.data(), copied)));
+        if (title.empty())
+            return TRUE;
+
+        CaptureWindowInfo info;
+        info.hwnd = hwnd;
+        info.title = title;
+        info.minimized = ::IsIconic(hwnd) != FALSE;
+        info.displayName = MakeCaptureWindowDisplayName(hwnd, title, info.minimized);
+        out->push_back(std::move(info));
+
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&windows));
+
+    return windows;
+}
+
+HWND FindCaptureWindowByTitle(const std::string& title)
+{
+    const std::string needle = OtherTools::TrimAscii(title);
+    if (needle.empty())
+        return nullptr;
+
+    const std::vector<CaptureWindowInfo> windows = EnumerateCaptureWindows();
+
+    for (const auto& window : windows)
+        if (window.title == needle)
+            return window.hwnd;
+
+    for (const auto& window : windows)
+        if (window.title.find(needle) != std::string::npos)
+            return window.hwnd;
+
+    for (const auto& window : windows)
+        if (OtherTools::ContainsCaseInsensitive(window.title, needle))
+            return window.hwnd;
+
+    return nullptr;
 }
 
 static std::string hr_to_string(HRESULT hr)
