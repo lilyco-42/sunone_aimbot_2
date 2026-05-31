@@ -50,6 +50,14 @@ std::atomic<int> captureFrameCount(0);
 std::atomic<int> captureFps(0);
 std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
 
+std::atomic<uint64_t> captureWinrtPollAttemptsTotal(0);
+std::atomic<uint64_t> captureWinrtFramesDrainedTotal(0);
+std::atomic<uint64_t> captureWinrtFramesReturnedTotal(0);
+std::atomic<uint64_t> captureWinrtEmptyPollsTotal(0);
+std::atomic<uint64_t> captureWinrtReadbackMicrosTotal(0);
+std::atomic<uint64_t> captureWinrtMapMicrosTotal(0);
+std::atomic<uint64_t> captureWinrtPixelCopyMicrosTotal(0);
+
 std::deque<cv::Mat> frameQueue;
 
 #ifdef USE_CUDA
@@ -58,6 +66,18 @@ namespace
 std::mutex g_detectionSuppressionMaskMutex;
 cv::Mat g_detectionSuppressionMask;
 }
+
+std::atomic<uint64_t> captureGpuAttemptsTotal(0);
+std::atomic<uint64_t> captureGpuCapturedTotal(0);
+std::atomic<uint64_t> captureGpuTimeoutTotal(0);
+std::atomic<uint64_t> captureGpuAccumulatedFramesTotal(0);
+std::atomic<uint64_t> captureGpuMissedFramesTotal(0);
+std::atomic<uint64_t> captureGpuPresentFramesTotal(0);
+std::atomic<uint64_t> captureGpuMouseOnlyEventsTotal(0);
+std::atomic<uint64_t> captureGpuMetadataOnlyEventsTotal(0);
+std::atomic<uint64_t> captureGpuCoalescedEventsTotal(0);
+std::atomic<uint64_t> captureCpuFallbackAttemptsTotal(0);
+std::atomic<uint64_t> captureCpuFallbackFramesTotal(0);
 
 static void UpdateDetectionSuppressionMask(const cv::Mat& mask)
 {
@@ -161,6 +181,13 @@ struct CudaCaptureDiagnostics
     uint64_t gpuCudaMapFailed = 0;
     uint64_t gpuCudaArrayFailed = 0;
     uint64_t gpuCudaCopyFailed = 0;
+    uint64_t gpuNoPresent = 0;
+    uint64_t gpuAccumulatedFrames = 0;
+    uint64_t gpuMissedFrames = 0;
+    uint64_t gpuPresentFrames = 0;
+    uint64_t gpuMouseOnlyEvents = 0;
+    uint64_t gpuMetadataOnlyEvents = 0;
+    uint64_t gpuCoalescedEvents = 0;
     uint64_t gpuSubmitted = 0;
     uint64_t gpuCpuCopies = 0;
     uint64_t cpuFallbackAttempts = 0;
@@ -178,9 +205,16 @@ void CountGpuCaptureStatus(CudaCaptureDiagnostics& diag, GpuCaptureStatus status
 {
     switch (status)
     {
-    case GpuCaptureStatus::Captured: diag.gpuCaptured++; break;
+    case GpuCaptureStatus::Captured:
+        diag.gpuCaptured++;
+        captureGpuCapturedTotal.fetch_add(1, std::memory_order_relaxed);
+        break;
     case GpuCaptureStatus::NotReady: diag.gpuNotReady++; break;
-    case GpuCaptureStatus::Timeout: diag.gpuTimeout++; break;
+    case GpuCaptureStatus::Timeout:
+        diag.gpuTimeout++;
+        captureGpuTimeoutTotal.fetch_add(1, std::memory_order_relaxed);
+        break;
+    case GpuCaptureStatus::NoPresent: diag.gpuNoPresent++; break;
     case GpuCaptureStatus::DeviceLost: diag.gpuDeviceLost++; break;
     case GpuCaptureStatus::AcquireFailed: diag.gpuAcquireFailed++; break;
     case GpuCaptureStatus::MissingTexture: diag.gpuMissingTexture++; break;
@@ -208,11 +242,19 @@ void MaybeLogCudaCaptureDiagnostics(CudaCaptureDiagnostics& diag, const CaptureT
         << " show_window=" << (cfg.show_window ? "true" : "false")
         << " circle_fov=" << (cfg.circle_fov_enabled ? "true" : "false")
         << " circle_fov_radius=" << cfg.circle_fov_radius_percent
+        << " depth_mask=" << ((cfg.depth_inference_enabled && cfg.depth_mask_enabled) ? "true" : "false")
         << " prefer_gpu=" << (diag.lastPreferGpu ? "true" : "false")
         << " need_cpu_copy=" << (diag.lastNeedCpuCopy ? "true" : "false")
         << " gpu_attempts=" << diag.gpuAttempts
         << " gpu_ok=" << diag.gpuCaptured
         << " gpu_timeout=" << diag.gpuTimeout
+        << " gpu_no_present=" << diag.gpuNoPresent
+        << " gpu_accumulated=" << diag.gpuAccumulatedFrames
+        << " gpu_missed=" << diag.gpuMissedFrames
+        << " gpu_present=" << diag.gpuPresentFrames
+        << " gpu_mouse_only=" << diag.gpuMouseOnlyEvents
+        << " gpu_metadata_only=" << diag.gpuMetadataOnlyEvents
+        << " gpu_coalesced=" << diag.gpuCoalescedEvents
         << " gpu_not_ready=" << diag.gpuNotReady
         << " gpu_lost=" << diag.gpuDeviceLost
         << " gpu_acquire_failed=" << diag.gpuAcquireFailed
@@ -591,8 +633,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 updateFrameDuration(currentCfg.capture_fps);
             }
 
+            const bool resolutionChanged =
+                currentCfg.detection_resolution > 0 &&
+                (currentCfg.detection_resolution != captureWidth ||
+                 currentCfg.detection_resolution != captureHeight);
+
             const bool needsReinit =
                 detection_resolution_changed.exchange(false) ||
+                resolutionChanged ||
                 capture_method_changed.exchange(false) ||
                 capture_cursor_changed.exchange(false) ||
                 capture_borders_changed.exchange(false) ||
@@ -693,6 +741,8 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
             cv::Mat detectionFrame;
             std::chrono::steady_clock::time_point frameTimestamp{};
             bool frameSubmittedToDetector = false;
+            bool skipCpuFallbackThisFrame = false;
+            bool keepCaptureAliveThisFrame = false;
 
 #ifdef USE_CUDA
             static bool lastDepthInferenceEnabled = true;
@@ -730,10 +780,44 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 {
                     cv::cuda::GpuMat screenshotGpu;
                     GpuCaptureStatus gpuStatus = GpuCaptureStatus::NotReady;
+                    uint32_t accumulatedFrames = 0;
+                    DdaCaptureFrameInfo ddaFrameInfo;
+                    auto countDdaFrameInfo = [&](const DdaCaptureFrameInfo& info)
+                    {
+                        if (info.hasLastPresentTime)
+                        {
+                            cudaDiag.gpuPresentFrames++;
+                            captureGpuPresentFramesTotal.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        else if (info.hasLastMouseUpdateTime)
+                        {
+                            cudaDiag.gpuMouseOnlyEvents++;
+                            captureGpuMouseOnlyEventsTotal.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        else
+                        {
+                            cudaDiag.gpuMetadataOnlyEvents++;
+                            captureGpuMetadataOnlyEventsTotal.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        if (info.rectsCoalesced)
+                        {
+                            cudaDiag.gpuCoalescedEvents++;
+                            captureGpuCoalescedEventsTotal.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    };
+
                     cudaDiag.gpuAttempts++;
-                    if (duplicationCapture->GetNextFrameGpu(screenshotGpu, &gpuStatus))
+                    captureGpuAttemptsTotal.fetch_add(1, std::memory_order_relaxed);
+                    if (duplicationCapture->GetNextFrameGpu(screenshotGpu, &gpuStatus, &accumulatedFrames, &ddaFrameInfo))
                     {
                         CountGpuCaptureStatus(cudaDiag, gpuStatus);
+                        const uint64_t accumulated = accumulatedFrames;
+                        const uint64_t missed = accumulated > 0 ? accumulated - 1 : 0;
+                        cudaDiag.gpuAccumulatedFrames += accumulated;
+                        cudaDiag.gpuMissedFrames += missed;
+                        captureGpuAccumulatedFramesTotal.fetch_add(accumulated, std::memory_order_relaxed);
+                        captureGpuMissedFramesTotal.fetch_add(missed, std::memory_order_relaxed);
+                        countDdaFrameInfo(ddaFrameInfo);
                         frameTimestamp = std::chrono::steady_clock::now();
                         trt_detector.processFrameGpu(screenshotGpu, frameTimestamp);
                         cudaDiag.gpuSubmitted++;
@@ -748,6 +832,14 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                     else
                     {
                         CountGpuCaptureStatus(cudaDiag, gpuStatus);
+                        if (gpuStatus == GpuCaptureStatus::NoPresent)
+                        {
+                            countDdaFrameInfo(ddaFrameInfo);
+                            skipCpuFallbackThisFrame = true;
+                            keepCaptureAliveThisFrame = true;
+                        }
+                        else if (gpuStatus == GpuCaptureStatus::Timeout)
+                            skipCpuFallbackThisFrame = true;
                     }
                 }
                 else
@@ -760,10 +852,34 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
 
             if (!frameSubmittedToDetector)
             {
+                if (skipCpuFallbackThisFrame)
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (keepCaptureAliveThisFrame)
+                    {
+                        lastSuccessfulFrameTime = now;
+                        publishCaptureSourceSize(capturer.get());
+                        setCaptureAvailable();
+                    }
+                    else if (now - lastSuccessfulFrameTime >= staleFrameTimeout)
+                        setCaptureUnavailable();
+
+                    if (!frameDuration.has_value())
+                        std::this_thread::yield();
+#ifdef USE_CUDA
+                    MaybeLogCudaCaptureDiagnostics(cudaDiag, currentCfg);
+#endif
+                    applyFrameLimiter();
+                    continue;
+                }
+
 #ifdef USE_CUDA
                 const bool cpuFallbackFromGpu = cudaDiag.lastPreferGpu;
                 if (cpuFallbackFromGpu)
+                {
                     cudaDiag.cpuFallbackAttempts++;
+                    captureCpuFallbackAttemptsTotal.fetch_add(1, std::memory_order_relaxed);
+                }
 #endif
                 screenshotCpu = capturer->GetNextFrameCpu();
                 frameTimestamp = std::chrono::steady_clock::now();
@@ -788,7 +904,10 @@ void captureThread(int CAPTURE_WIDTH, int CAPTURE_HEIGHT)
                 }
 #ifdef USE_CUDA
                 if (cpuFallbackFromGpu)
+                {
                     cudaDiag.cpuFallbackFrames++;
+                    captureCpuFallbackFramesTotal.fetch_add(1, std::memory_order_relaxed);
+                }
                 else
                     cudaDiag.cpuPathFrames++;
 #endif

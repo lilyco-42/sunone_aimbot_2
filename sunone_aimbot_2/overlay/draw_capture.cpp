@@ -71,7 +71,7 @@ void draw_capture_settings()
 
         {
             const auto row = OverlayUI::BeginSettingRow("Capture FPS");
-            if (ImGui::SliderInt("##value", &config.capture_fps, 0, 240))
+            if (ImGui::SliderInt("##value", &config.capture_fps, 0, 360))
             {
                 capture_fps_changed.store(true);
                 OverlayConfig_MarkDirty();
@@ -81,7 +81,7 @@ void draw_capture_settings()
 
         if (config.capture_fps == 0)
         {
-            OverlayUI::TextRow("Capture FPS is disabled.", IM_COL32(255, 108, 108, 255));
+            OverlayUI::TextRow("Capture FPS cap is disabled.", IM_COL32(255, 188, 108, 255));
         }
         else if (config.capture_fps >= 61)
         {

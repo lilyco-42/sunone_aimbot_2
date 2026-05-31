@@ -22,6 +22,7 @@ extern std::atomic<bool> aiming;
 extern std::atomic<bool> shooting;
 extern std::atomic<bool> zooming;
 extern std::atomic<bool> detectionPaused;
+extern std::atomic<bool> detector_model_changed;
 
 extern MouseThread* globalMouseThread;
 
@@ -202,7 +203,59 @@ void keyboardListener()
             {
                 {
                     std::lock_guard<std::mutex> lock(configMutex);
+                    const int oldDetectionResolution = config.detection_resolution;
+                    const int oldCaptureFps = config.capture_fps;
+                    const std::string oldCaptureMethod = config.capture_method;
+                    const std::string oldCaptureTarget = config.capture_target;
+                    const std::string oldCaptureWindowTitle = config.capture_window_title;
+                    const int oldMonitorIdx = config.monitor_idx;
+                    const bool oldCaptureBorders = config.capture_borders;
+                    const bool oldCaptureCursor = config.capture_cursor;
+                    const std::string oldVirtualCameraName = config.virtual_camera_name;
+                    const int oldVirtualCameraWidth = config.virtual_camera_width;
+                    const int oldVirtualCameraHeight = config.virtual_camera_heigth;
+                    const std::string oldUdpIp = config.udp_ip;
+                    const int oldUdpPort = config.udp_port;
+                    const std::string oldBackend = config.backend;
+                    const std::string oldAiModel = config.ai_model;
+                    const std::string oldInputMethod = config.input_method;
+
                     config.loadConfig();
+
+                    if (config.detection_resolution != oldDetectionResolution)
+                    {
+                        detection_resolution_changed.store(true);
+                        detector_model_changed.store(true);
+                    }
+
+                    if (config.capture_fps != oldCaptureFps)
+                        capture_fps_changed.store(true);
+
+                    if (config.capture_method != oldCaptureMethod ||
+                        config.capture_target != oldCaptureTarget ||
+                        config.capture_window_title != oldCaptureWindowTitle ||
+                        config.monitor_idx != oldMonitorIdx ||
+                        config.virtual_camera_name != oldVirtualCameraName ||
+                        config.virtual_camera_width != oldVirtualCameraWidth ||
+                        config.virtual_camera_heigth != oldVirtualCameraHeight ||
+                        config.udp_ip != oldUdpIp ||
+                        config.udp_port != oldUdpPort)
+                    {
+                        capture_method_changed.store(true);
+                        capture_window_changed.store(true);
+                    }
+
+                    if (config.capture_borders != oldCaptureBorders)
+                        capture_borders_changed.store(true);
+
+                    if (config.capture_cursor != oldCaptureCursor)
+                        capture_cursor_changed.store(true);
+
+                    if (config.backend != oldBackend || config.ai_model != oldAiModel)
+                        detector_model_changed.store(true);
+
+                    if (config.input_method != oldInputMethod)
+                        input_method_changed.store(true);
 
                     if (globalMouseThread)
                     {

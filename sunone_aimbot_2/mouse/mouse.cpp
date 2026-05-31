@@ -535,15 +535,21 @@ void MouseThread::sendMovementToDriver(int dx, int dy)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(inputDevicesMutex);
-
-    if (!mouseInput)
     {
-        return;
+        std::lock_guard<std::mutex> lock(inputDevicesMutex);
+
+        if (!mouseInput)
+        {
+            return;
+        }
+
+        if (!mouseInput->move(dx, dy))
+        {
+            return;
+        }
     }
 
-    if (mouseInput->move(dx, dy))
-        recordMotionCompensationStep(dx, dy);
+    recordMotionCompensationStep(dx, dy);
 }
 
 void MouseThread::moveRelative(int dx, int dy)

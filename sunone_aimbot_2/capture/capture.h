@@ -7,6 +7,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <deque>
+#include <cstdint>
 
 extern std::atomic<bool> detection_resolution_changed;
 extern std::atomic<bool> capture_method_changed;
@@ -23,6 +24,14 @@ extern std::atomic<int> screenHeight;
 extern std::atomic<int> captureFrameCount;
 extern std::atomic<int> captureFps;
 extern std::chrono::time_point<std::chrono::high_resolution_clock> captureFpsStartTime;
+
+extern std::atomic<uint64_t> captureWinrtPollAttemptsTotal;
+extern std::atomic<uint64_t> captureWinrtFramesDrainedTotal;
+extern std::atomic<uint64_t> captureWinrtFramesReturnedTotal;
+extern std::atomic<uint64_t> captureWinrtEmptyPollsTotal;
+extern std::atomic<uint64_t> captureWinrtReadbackMicrosTotal;
+extern std::atomic<uint64_t> captureWinrtMapMicrosTotal;
+extern std::atomic<uint64_t> captureWinrtPixelCopyMicrosTotal;
 
 extern cv::Mat latestFrame;
 
@@ -57,6 +66,17 @@ private:
 
 #ifdef USE_CUDA
 cv::Mat getCurrentDetectionSuppressionMask();
+extern std::atomic<uint64_t> captureGpuAttemptsTotal;
+extern std::atomic<uint64_t> captureGpuCapturedTotal;
+extern std::atomic<uint64_t> captureGpuTimeoutTotal;
+extern std::atomic<uint64_t> captureGpuAccumulatedFramesTotal;
+extern std::atomic<uint64_t> captureGpuMissedFramesTotal;
+extern std::atomic<uint64_t> captureGpuPresentFramesTotal;
+extern std::atomic<uint64_t> captureGpuMouseOnlyEventsTotal;
+extern std::atomic<uint64_t> captureGpuMetadataOnlyEventsTotal;
+extern std::atomic<uint64_t> captureGpuCoalescedEventsTotal;
+extern std::atomic<uint64_t> captureCpuFallbackAttemptsTotal;
+extern std::atomic<uint64_t> captureCpuFallbackFramesTotal;
 #endif
 
 #endif // CAPTURE_H

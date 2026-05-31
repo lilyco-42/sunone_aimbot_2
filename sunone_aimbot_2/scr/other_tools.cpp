@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cctype>
 #include <cstdint>
+#include <cwchar>
 #include <filesystem>
 #include <algorithm>
 #include <array>
@@ -672,6 +673,90 @@ HMONITOR GetMonitorHandleByIndex(int monitorIndex)
         reinterpret_cast<LPARAM>(&search));
 
     return search.targetMonitor;
+}
+
+namespace
+{
+double RefreshRateFromRational(const DISPLAYCONFIG_RATIONAL& refreshRate)
+{
+    if (refreshRate.Numerator == 0 || refreshRate.Denominator == 0)
+        return 0.0;
+
+    return static_cast<double>(refreshRate.Numerator) /
+        static_cast<double>(refreshRate.Denominator);
+}
+
+double GetDisplayConfigRefreshRateForDevice(const wchar_t* gdiDeviceName)
+{
+    if (!gdiDeviceName || gdiDeviceName[0] == L'\0')
+        return 0.0;
+
+    UINT32 pathCount = 0;
+    UINT32 modeCount = 0;
+    LONG result = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount);
+    if (result != ERROR_SUCCESS || pathCount == 0 || modeCount == 0)
+        return 0.0;
+
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    result = QueryDisplayConfig(
+        QDC_ONLY_ACTIVE_PATHS,
+        &pathCount,
+        paths.data(),
+        &modeCount,
+        modes.data(),
+        nullptr);
+    if (result != ERROR_SUCCESS)
+        return 0.0;
+
+    paths.resize(pathCount);
+    for (const auto& path : paths)
+    {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName{};
+        sourceName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        sourceName.header.size = sizeof(sourceName);
+        sourceName.header.adapterId = path.sourceInfo.adapterId;
+        sourceName.header.id = path.sourceInfo.id;
+
+        if (DisplayConfigGetDeviceInfo(&sourceName.header) != ERROR_SUCCESS)
+            continue;
+
+        if (wcscmp(sourceName.viewGdiDeviceName, gdiDeviceName) == 0)
+        {
+            const double refreshHz = RefreshRateFromRational(path.targetInfo.refreshRate);
+            if (refreshHz > 0.0)
+                return refreshHz;
+        }
+    }
+
+    return 0.0;
+}
+}
+
+double GetMonitorRefreshRateByIndex(int monitorIndex)
+{
+    HMONITOR monitor = GetMonitorHandleByIndex(monitorIndex);
+    if (!monitor)
+        return 0.0;
+
+    MONITORINFOEXW monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (!GetMonitorInfoW(monitor, &monitorInfo))
+        return 0.0;
+
+    double refreshHz = GetDisplayConfigRefreshRateForDevice(monitorInfo.szDevice);
+    if (refreshHz > 0.0)
+        return refreshHz;
+
+    DEVMODEW devMode{};
+    devMode.dmSize = sizeof(devMode);
+    if (EnumDisplaySettingsW(monitorInfo.szDevice, ENUM_CURRENT_SETTINGS, &devMode) &&
+        devMode.dmDisplayFrequency > 1)
+    {
+        return static_cast<double>(devMode.dmDisplayFrequency);
+    }
+
+    return 0.0;
 }
 
 std::vector<std::string> getAvailableModels()

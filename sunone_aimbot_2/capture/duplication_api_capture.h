@@ -5,17 +5,30 @@
 #include <dxgi1_2.h>
 #include <opencv2/opencv.hpp>
 #include <memory>
+#include <cstdint>
 
 #ifdef USE_CUDA
 #include <cuda_runtime_api.h>
 #include <opencv2/core/cuda.hpp>
 struct cudaGraphicsResource;
 
+struct DdaCaptureFrameInfo
+{
+    uint32_t accumulatedFrames = 0;
+    bool hasLastPresentTime = false;
+    bool hasLastMouseUpdateTime = false;
+    bool pointerVisible = false;
+    bool rectsCoalesced = false;
+    uint32_t totalMetadataBufferSize = 0;
+    uint32_t pointerShapeBufferSize = 0;
+};
+
 enum class GpuCaptureStatus
 {
     Captured,
     NotReady,
     Timeout,
+    NoPresent,
     DeviceLost,
     AcquireFailed,
     MissingTexture,
@@ -38,7 +51,11 @@ public:
     cv::Mat GetNextFrameCpu() override;
     bool isInitialized() const { return initialized_; }
 #ifdef USE_CUDA
-    bool GetNextFrameGpu(cv::cuda::GpuMat& gpuFrameBgra, GpuCaptureStatus* status = nullptr);
+    bool GetNextFrameGpu(
+        cv::cuda::GpuMat& gpuFrameBgra,
+        GpuCaptureStatus* status = nullptr,
+        uint32_t* accumulatedFrames = nullptr,
+        DdaCaptureFrameInfo* frameInfo = nullptr);
 #endif
 
 private:

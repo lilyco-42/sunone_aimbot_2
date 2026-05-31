@@ -4,12 +4,14 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 
 #include "imgui/imgui.h"
 #include "sunone_aimbot_2.h"
 #include "overlay.h"
 #include "capture.h"
+#include "other_tools.h"
 #include "overlay/ui_sections.h"
 
 void draw_stats()
@@ -88,6 +90,24 @@ void draw_stats()
         last_avg_update_time = now;
     }
 
+    const bool captureUsesMonitorRefresh =
+        config.capture_method == "duplication_api" ||
+        (config.capture_method == "winrt" && config.capture_target != "window");
+
+    static int cachedRefreshMonitorIdx = -1;
+    static double cachedRefreshQueryTime = -100.0;
+    static double cachedMonitorRefreshHz = 0.0;
+    if (captureUsesMonitorRefresh)
+    {
+        const int monitorIdx = std::max(0, config.monitor_idx);
+        if (cachedRefreshMonitorIdx != monitorIdx || now - cachedRefreshQueryTime >= 2.0)
+        {
+            cachedMonitorRefreshHz = GetMonitorRefreshRateByIndex(monitorIdx);
+            cachedRefreshMonitorIdx = monitorIdx;
+            cachedRefreshQueryTime = now;
+        }
+    }
+
     if (OverlayUI::BeginSection("Time Breakdown", "stats_section_time_breakdown"))
     {
         ImGui::PlotLines("Preprocess", preprocess_times, IM_ARRAYSIZE(preprocess_times), index_inf, nullptr, 0.0f, 20.0f, ImVec2(0, 40));
@@ -122,9 +142,22 @@ void draw_stats()
 
     if (OverlayUI::BeginSection("Capture FPS", "stats_section_capture_fps"))
     {
-        ImGui::PlotLines("##fps_plot", capture_fps_vals, IM_ARRAYSIZE(capture_fps_vals), index_fps, nullptr, 0.0f, 144.0f, ImVec2(0, 60));
+        const float fpsPlotMax = (captureUsesMonitorRefresh && cachedMonitorRefreshHz > 1.0)
+            ? static_cast<float>(cachedMonitorRefreshHz)
+            : 360.0f;
+        ImGui::PlotLines("##fps_plot", capture_fps_vals, IM_ARRAYSIZE(capture_fps_vals), index_fps, nullptr, 0.0f, fpsPlotMax, ImVec2(0, 60));
         ImGui::SameLine();
         ImGui::Text("Now: %.1f | Avg: %.1f", current_fps, avg_fps_cached);
+        if (captureUsesMonitorRefresh && cachedMonitorRefreshHz > 1.0)
+        {
+            const float refreshHz = static_cast<float>(cachedMonitorRefreshHz);
+            const float fpsLoad = std::clamp(avg_fps_cached / refreshHz, 0.0f, 1.0f);
+            ImGui::Spacing();
+            ImGui::Text("Monitor load");
+            ImGui::SameLine();
+            ImGui::TextDisabled("%.1f / %.1f Hz (%.0f%%)", avg_fps_cached, refreshHz, fpsLoad * 100.0f);
+            ImGui::ProgressBar(fpsLoad, ImVec2(-1.0f, 18.0f), "");
+        }
         OverlayUI::EndSection();
     }
 
@@ -192,6 +225,14 @@ void draw_stats()
         else
             ImGui::TextDisabled("%s: n/a", sourceSizeLabel.c_str());
 
+        if (captureUsesMonitorRefresh)
+        {
+            if (cachedMonitorRefreshHz > 0.0)
+                ImGui::Text("Monitor refresh: %.2f Hz", cachedMonitorRefreshHz);
+            else
+                ImGui::TextDisabled("Monitor refresh: n/a");
+        }
+
         if (latestWidth > 0 && latestHeight > 0)
             ImGui::Text("Latest frame: %dx%d", latestWidth, latestHeight);
         else
@@ -210,6 +251,84 @@ void draw_stats()
 
         ImGui::Text("Frame queue depth: %d", static_cast<int>(queueDepth));
         ImGui::Text("Circle FOV: %s", config.circle_fov_enabled ? "on" : "off");
+
+        static bool winrtStatsInitialized = false;
+        static uint64_t lastWinrtPolls = 0;
+        static uint64_t lastWinrtDrained = 0;
+        static uint64_t lastWinrtReturned = 0;
+        static uint64_t lastWinrtEmpty = 0;
+        static uint64_t lastWinrtReadbackMicros = 0;
+        static uint64_t lastWinrtMapMicros = 0;
+        static uint64_t lastWinrtPixelCopyMicros = 0;
+        static double lastWinrtStatsTime = 0.0;
+        static float winrtPollRate = 0.0f;
+        static float winrtDrainedRate = 0.0f;
+        static float winrtReturnedRate = 0.0f;
+        static float winrtEmptyRate = 0.0f;
+        static float winrtReadbackAvgMs = 0.0f;
+        static float winrtMapAvgMs = 0.0f;
+        static float winrtPixelCopyAvgMs = 0.0f;
+
+        if (config.capture_method == "winrt")
+        {
+            const uint64_t winrtPolls = captureWinrtPollAttemptsTotal.load(std::memory_order_relaxed);
+            const uint64_t winrtDrained = captureWinrtFramesDrainedTotal.load(std::memory_order_relaxed);
+            const uint64_t winrtReturned = captureWinrtFramesReturnedTotal.load(std::memory_order_relaxed);
+            const uint64_t winrtEmpty = captureWinrtEmptyPollsTotal.load(std::memory_order_relaxed);
+            const uint64_t winrtReadbackMicros = captureWinrtReadbackMicrosTotal.load(std::memory_order_relaxed);
+            const uint64_t winrtMapMicros = captureWinrtMapMicrosTotal.load(std::memory_order_relaxed);
+            const uint64_t winrtPixelCopyMicros = captureWinrtPixelCopyMicrosTotal.load(std::memory_order_relaxed);
+
+            if (!winrtStatsInitialized)
+            {
+                lastWinrtPolls = winrtPolls;
+                lastWinrtDrained = winrtDrained;
+                lastWinrtReturned = winrtReturned;
+                lastWinrtEmpty = winrtEmpty;
+                lastWinrtReadbackMicros = winrtReadbackMicros;
+                lastWinrtMapMicros = winrtMapMicros;
+                lastWinrtPixelCopyMicros = winrtPixelCopyMicros;
+                lastWinrtStatsTime = now;
+                winrtStatsInitialized = true;
+            }
+            else if (now - lastWinrtStatsTime >= 1.0)
+            {
+                const float dt = static_cast<float>(std::max(0.001, now - lastWinrtStatsTime));
+                const uint64_t returnedDelta = winrtReturned - lastWinrtReturned;
+                winrtPollRate = static_cast<float>(winrtPolls - lastWinrtPolls) / dt;
+                winrtDrainedRate = static_cast<float>(winrtDrained - lastWinrtDrained) / dt;
+                winrtReturnedRate = static_cast<float>(returnedDelta) / dt;
+                winrtEmptyRate = static_cast<float>(winrtEmpty - lastWinrtEmpty) / dt;
+                if (returnedDelta > 0)
+                {
+                    winrtReadbackAvgMs = static_cast<float>(winrtReadbackMicros - lastWinrtReadbackMicros) /
+                        (1000.0f * static_cast<float>(returnedDelta));
+                    winrtMapAvgMs = static_cast<float>(winrtMapMicros - lastWinrtMapMicros) /
+                        (1000.0f * static_cast<float>(returnedDelta));
+                    winrtPixelCopyAvgMs = static_cast<float>(winrtPixelCopyMicros - lastWinrtPixelCopyMicros) /
+                        (1000.0f * static_cast<float>(returnedDelta));
+                }
+
+                lastWinrtPolls = winrtPolls;
+                lastWinrtDrained = winrtDrained;
+                lastWinrtReturned = winrtReturned;
+                lastWinrtEmpty = winrtEmpty;
+                lastWinrtReadbackMicros = winrtReadbackMicros;
+                lastWinrtMapMicros = winrtMapMicros;
+                lastWinrtPixelCopyMicros = winrtPixelCopyMicros;
+                lastWinrtStatsTime = now;
+            }
+
+            ImGui::Separator();
+            ImGui::Text("WinRT frames: %.1f/s | pulled: %.1f/s", winrtReturnedRate, winrtDrainedRate);
+            ImGui::Text("WinRT empty polls: %.1f/s | polls: %.1f/s", winrtEmptyRate, winrtPollRate);
+            ImGui::Text("WinRT readback avg: %.3f ms | Map: %.3f ms", winrtReadbackAvgMs, winrtMapAvgMs);
+            ImGui::Text("WinRT memcpy avg: %.3f ms", winrtPixelCopyAvgMs);
+        }
+        else
+        {
+            winrtStatsInitialized = false;
+        }
 
 #ifdef USE_CUDA
         if (config.backend == "TRT")
@@ -242,6 +361,93 @@ void draw_stats()
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.78f, 0.28f, 1.0f));
             ImGui::TextWrapped("Direct capture status: %s", directCaptureStatus.c_str());
             ImGui::PopStyleColor();
+
+            static uint64_t lastGpuAttempts = 0;
+            static uint64_t lastGpuCaptured = 0;
+            static uint64_t lastGpuTimeouts = 0;
+            static uint64_t lastGpuAccumulated = 0;
+            static uint64_t lastGpuMissed = 0;
+            static uint64_t lastGpuPresent = 0;
+            static uint64_t lastGpuMouseOnly = 0;
+            static uint64_t lastGpuMetadataOnly = 0;
+            static uint64_t lastGpuCoalesced = 0;
+            static uint64_t lastCpuFallbackAttempts = 0;
+            static uint64_t lastCpuFallbackFrames = 0;
+            static double lastGpuStatsTime = 0.0;
+            static float gpuAttemptRate = 0.0f;
+            static float gpuCapturedRate = 0.0f;
+            static float gpuTimeoutRate = 0.0f;
+            static float gpuAccumulatedRate = 0.0f;
+            static float gpuMissedRate = 0.0f;
+            static float gpuPresentRate = 0.0f;
+            static float gpuMouseOnlyRate = 0.0f;
+            static float gpuMetadataOnlyRate = 0.0f;
+            static float gpuCoalescedRate = 0.0f;
+            static float cpuFallbackAttemptRate = 0.0f;
+            static float cpuFallbackFrameRate = 0.0f;
+
+            const uint64_t gpuAttempts = captureGpuAttemptsTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuCaptured = captureGpuCapturedTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuTimeouts = captureGpuTimeoutTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuAccumulated = captureGpuAccumulatedFramesTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuMissed = captureGpuMissedFramesTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuPresent = captureGpuPresentFramesTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuMouseOnly = captureGpuMouseOnlyEventsTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuMetadataOnly = captureGpuMetadataOnlyEventsTotal.load(std::memory_order_relaxed);
+            const uint64_t gpuCoalesced = captureGpuCoalescedEventsTotal.load(std::memory_order_relaxed);
+            const uint64_t cpuFallbackAttempts = captureCpuFallbackAttemptsTotal.load(std::memory_order_relaxed);
+            const uint64_t cpuFallbackFrames = captureCpuFallbackFramesTotal.load(std::memory_order_relaxed);
+
+            if (lastGpuStatsTime <= 0.0)
+            {
+                lastGpuAttempts = gpuAttempts;
+                lastGpuCaptured = gpuCaptured;
+                lastGpuTimeouts = gpuTimeouts;
+                lastGpuAccumulated = gpuAccumulated;
+                lastGpuMissed = gpuMissed;
+                lastGpuPresent = gpuPresent;
+                lastGpuMouseOnly = gpuMouseOnly;
+                lastGpuMetadataOnly = gpuMetadataOnly;
+                lastGpuCoalesced = gpuCoalesced;
+                lastCpuFallbackAttempts = cpuFallbackAttempts;
+                lastCpuFallbackFrames = cpuFallbackFrames;
+                lastGpuStatsTime = now;
+            }
+            else if (now - lastGpuStatsTime >= 1.0)
+            {
+                const float dt = static_cast<float>(std::max(0.001, now - lastGpuStatsTime));
+                gpuAttemptRate = static_cast<float>(gpuAttempts - lastGpuAttempts) / dt;
+                gpuCapturedRate = static_cast<float>(gpuCaptured - lastGpuCaptured) / dt;
+                gpuTimeoutRate = static_cast<float>(gpuTimeouts - lastGpuTimeouts) / dt;
+                gpuAccumulatedRate = static_cast<float>(gpuAccumulated - lastGpuAccumulated) / dt;
+                gpuMissedRate = static_cast<float>(gpuMissed - lastGpuMissed) / dt;
+                gpuPresentRate = static_cast<float>(gpuPresent - lastGpuPresent) / dt;
+                gpuMouseOnlyRate = static_cast<float>(gpuMouseOnly - lastGpuMouseOnly) / dt;
+                gpuMetadataOnlyRate = static_cast<float>(gpuMetadataOnly - lastGpuMetadataOnly) / dt;
+                gpuCoalescedRate = static_cast<float>(gpuCoalesced - lastGpuCoalesced) / dt;
+                cpuFallbackAttemptRate = static_cast<float>(cpuFallbackAttempts - lastCpuFallbackAttempts) / dt;
+                cpuFallbackFrameRate = static_cast<float>(cpuFallbackFrames - lastCpuFallbackFrames) / dt;
+
+                lastGpuAttempts = gpuAttempts;
+                lastGpuCaptured = gpuCaptured;
+                lastGpuTimeouts = gpuTimeouts;
+                lastGpuAccumulated = gpuAccumulated;
+                lastGpuMissed = gpuMissed;
+                lastGpuPresent = gpuPresent;
+                lastGpuMouseOnly = gpuMouseOnly;
+                lastGpuMetadataOnly = gpuMetadataOnly;
+                lastGpuCoalesced = gpuCoalesced;
+                lastCpuFallbackAttempts = cpuFallbackAttempts;
+                lastCpuFallbackFrames = cpuFallbackFrames;
+                lastGpuStatsTime = now;
+            }
+
+            ImGui::Text("DDA submitted frames: %.1f/s | attempts: %.1f/s", gpuCapturedRate, gpuAttemptRate);
+            ImGui::Text("DDA present frames: %.1f/s | mouse-only: %.1f/s", gpuPresentRate, gpuMouseOnlyRate);
+            ImGui::Text("DDA metadata-only: %.1f/s | coalesced: %.1f/s", gpuMetadataOnlyRate, gpuCoalescedRate);
+            ImGui::Text("DDA GPU timeouts: %.1f/s | accumulated: %.1f/s", gpuTimeoutRate, gpuAccumulatedRate);
+            ImGui::Text("DDA GPU missed/coalesced: %.1f/s", gpuMissedRate);
+            ImGui::Text("DDA CPU fallback: %.1f/s | attempts: %.1f/s", cpuFallbackFrameRate, cpuFallbackAttemptRate);
         }
 #endif
 

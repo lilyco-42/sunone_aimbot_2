@@ -39,6 +39,7 @@ bool LoadTextureFromMemory(const std::string& imageBase64, ID3D11Device* device,
 std::string get_ghub_version();
 int get_active_monitors();
 HMONITOR GetMonitorHandleByIndex(int monitorIndex);
+double GetMonitorRefreshRateByIndex(int monitorIndex);
 void SetRandomConsoleTitle();
 bool IsValidImageFile(const std::wstring& wpath, UINT& outW, UINT& outH, std::string& outErr);
 

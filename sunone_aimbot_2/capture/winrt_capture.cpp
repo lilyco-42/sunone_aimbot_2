@@ -4,6 +4,8 @@
 #include <winsock2.h>
 #include <Windows.h>
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 
@@ -19,6 +21,16 @@
 using namespace winrt::Windows::Graphics::Capture;
 using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
+
+namespace
+{
+uint64_t ElapsedMicros(std::chrono::steady_clock::time_point start,
+                       std::chrono::steady_clock::time_point end)
+{
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+}
+}
 
 winrt::com_ptr<IGraphicsCaptureItemInterop> GetInteropFactory()
 {
@@ -83,6 +95,12 @@ WinRTScreenCapture::WinRTScreenCapture(int desiredWidth, int desiredHeight, cons
 
     winrt::com_ptr<IDXGIDevice> dxgiDevice;
     winrt::check_hresult(d3dDevice->QueryInterface(IID_PPV_ARGS(dxgiDevice.put())));
+    winrt::com_ptr<IDXGIDevice1> dxgiDevice1;
+    if (SUCCEEDED(dxgiDevice->QueryInterface(IID_PPV_ARGS(dxgiDevice1.put()))))
+    {
+        dxgiDevice1->SetMaximumFrameLatency(1);
+    }
+
     device = CreateDirect3DDevice(dxgiDevice.get());
     if (!device)
     {
@@ -136,6 +154,10 @@ WinRTScreenCapture::WinRTScreenCapture(int desiredWidth, int desiredHeight, cons
     );
 
     session = framePool.CreateCaptureSession(captureItem);
+    if (auto session5 = session.try_as<IGraphicsCaptureSession5>())
+    {
+        session5.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{ 0 });
+    }
 
     if (!options.captureBorders)
     {
@@ -198,13 +220,15 @@ cv::Mat WinRTScreenCapture::GetNextFrameCpu()
     if (!framePool || !stagingTextureCPU)
         return cv::Mat();
 
-    Direct3D11CaptureFrame lastFrame{ nullptr };
-    while (auto tempFrame = framePool.TryGetNextFrame())
-    {
-        lastFrame = tempFrame;
-    }
+    captureWinrtPollAttemptsTotal.fetch_add(1, std::memory_order_relaxed);
+
+    Direct3D11CaptureFrame lastFrame = framePool.TryGetNextFrame();
     if (!lastFrame)
+    {
+        captureWinrtEmptyPollsTotal.fetch_add(1, std::memory_order_relaxed);
         return cv::Mat();
+    }
+    captureWinrtFramesDrainedTotal.fetch_add(1, std::memory_order_relaxed);
 
     const auto contentSize = lastFrame.ContentSize();
     if (contentSize.Width > 0 && contentSize.Height > 0 &&
@@ -243,6 +267,7 @@ cv::Mat WinRTScreenCapture::GetNextFrameCpu()
     sourceRegion.bottom = regionY + regionHeight;
     sourceRegion.back = 1;
 
+    const auto readbackStart = std::chrono::steady_clock::now();
     d3dContext->CopySubresourceRegion(
         stagingTextureCPU.get(),
         0,
@@ -253,7 +278,10 @@ cv::Mat WinRTScreenCapture::GetNextFrameCpu()
     );
 
     D3D11_MAPPED_SUBRESOURCE mapped;
+    const auto mapStart = std::chrono::steady_clock::now();
     HRESULT hrMap = d3dContext->Map(stagingTextureCPU.get(), 0, D3D11_MAP_READ, 0, &mapped);
+    const auto mapEnd = std::chrono::steady_clock::now();
+    captureWinrtMapMicrosTotal.fetch_add(ElapsedMicros(mapStart, mapEnd), std::memory_order_relaxed);
     if (FAILED(hrMap))
     {
         std::cerr << "[WinRTCapture] Map stagingTextureCPU failed hr=" << std::hex << hrMap << std::endl;
@@ -263,13 +291,24 @@ cv::Mat WinRTScreenCapture::GetNextFrameCpu()
     }
 
     cv::Mat cpuFrame(regionHeight, regionWidth, CV_8UC4);
+    const auto pixelCopyStart = std::chrono::steady_clock::now();
     for (int y = 0; y < regionHeight; y++)
     {
         unsigned char* dstRow = cpuFrame.ptr<unsigned char>(y);
         unsigned char* srcRow = (unsigned char*)mapped.pData + y * mapped.RowPitch;
         memcpy(dstRow, srcRow, regionWidth * 4);
     }
+    const auto pixelCopyEnd = std::chrono::steady_clock::now();
     d3dContext->Unmap(stagingTextureCPU.get(), 0);
+    const auto readbackEnd = std::chrono::steady_clock::now();
+
+    captureWinrtPixelCopyMicrosTotal.fetch_add(
+        ElapsedMicros(pixelCopyStart, pixelCopyEnd),
+        std::memory_order_relaxed);
+    captureWinrtReadbackMicrosTotal.fetch_add(
+        ElapsedMicros(readbackStart, readbackEnd),
+        std::memory_order_relaxed);
+    captureWinrtFramesReturnedTotal.fetch_add(1, std::memory_order_relaxed);
 
     return cpuFrame;
 }

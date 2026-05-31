@@ -41,6 +41,7 @@ void mouseThreadFunction(MouseThread& mouseThread)
     int activeTrackId = -1;
     bool activeTargetObserved = false;
     bool wasAiming = false;
+    int appliedDetectionResolution = -1;
     auto lastTrackerUpdate = std::chrono::steady_clock::time_point::min();
 
     auto resetActiveTarget = [&]() {
@@ -94,17 +95,17 @@ void mouseThreadFunction(MouseThread& mouseThread)
             }
         }
 
-        if (input_method_changed.load())
+        if (input_method_changed.exchange(false))
         {
             createInputDevices();
             assignInputDevices();
-            input_method_changed.store(false);
         }
 
-        if (detection_resolution_changed.load())
+        if (detection_resolution_changed.load() || detectionResolution != appliedDetectionResolution)
         {
             {
                 std::lock_guard<std::mutex> cfgLock(configMutex);
+                appliedDetectionResolution = config.detection_resolution;
                 mouseThread.updateConfig(
                     config.detection_resolution,
                     config.fovX,
@@ -123,7 +124,6 @@ void mouseThreadFunction(MouseThread& mouseThread)
                 g_trackerLockedId = -1;
             }
             resetActiveTarget();
-            detection_resolution_changed.store(false);
         }
 
         if (hasNewDetection)

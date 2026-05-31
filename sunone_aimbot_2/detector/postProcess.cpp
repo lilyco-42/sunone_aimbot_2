@@ -11,6 +11,17 @@
 
 namespace
 {
+void SortDetectionsByConfidence(std::vector<Detection>& detections)
+{
+    std::sort(
+        detections.begin(),
+        detections.end(),
+        [](const Detection& a, const Detection& b)
+        {
+            return a.confidence > b.confidence;
+        });
+}
+
 void LimitDetectionsByConfidence(std::vector<Detection>& detections, size_t limit)
 {
     if (limit == 0 || detections.size() <= limit)
@@ -48,6 +59,8 @@ void RunBoundedNms(
 
     if (maxDetections > 0)
         LimitDetectionsByConfidence(detections, static_cast<size_t>(maxDetections));
+
+    SortDetectionsByConfidence(detections);
 }
 }
 
@@ -66,14 +79,7 @@ void NMS(std::vector<Detection>& detections, float nmsThreshold, std::chrono::du
 
     auto t0 = std::chrono::steady_clock::now();
 
-    std::sort(
-        detections.begin(),
-        detections.end(),
-        [](const Detection& a, const Detection& b)
-        {
-            return a.confidence > b.confidence;
-        }
-    );
+    SortDetectionsByConfidence(detections);
 
     std::vector<bool> suppress(detections.size(), false);
     std::vector<Detection> result;
