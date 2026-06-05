@@ -49,9 +49,9 @@ Circle FOV can remain enabled for circular target filtering.
 | `capture_method` | `duplication_api` | Capture source. Common values are `duplication_api`, `winrt`, `virtual_camera`, and `udp_capture`. |
 | `capture_target` | `monitor` | Target type for capture. Usually `monitor`. |
 | `capture_window_title` | empty | Window title used when a window capture target is selected. |
-| `udp_ip` | `0.0.0.0` | Listen address for UDP capture. |
+| `udp_ip` | `0.0.0.0` | Sender IP filter for UDP capture. Use `0.0.0.0` to accept frames from any sender. |
 | `udp_port` | `1234` | UDP capture port. |
-| `detection_resolution` | `320` | Square inference/capture processing size. Higher can improve detail but costs performance. |
+| `detection_resolution` | `320` | Square inference/capture processing size. Valid values are `160`, `320`, and `640`. Higher can improve detail but costs performance. |
 | `capture_fps` | `60` | Requested capture rate. |
 | `monitor_idx` | `0` | Monitor index for monitor capture. |
 | `circle_fov_enabled` | `true` | Enables the current circular FOV limiter. |
@@ -62,6 +62,24 @@ Circle FOV can remain enabled for circular target filtering.
 | `virtual_camera_name` | `None` | Camera name for virtual camera capture. |
 | `virtual_camera_width` | `1920` | Requested virtual camera width. |
 | `virtual_camera_heigth` | `1080` | Requested virtual camera height. The key is currently spelled `heigth` in the config for compatibility. |
+
+### UDP Capture
+
+Use UDP capture when another PC or process sends a screen/camera stream to this app over the network.
+
+```ini
+capture_method = udp_capture
+udp_ip = 0.0.0.0
+udp_port = 1234
+detection_resolution = 320
+capture_fps = 60
+```
+
+The receiver expects an MJPEG byte stream over UDP. Each frame must be a normal JPEG image; the app finds frames by JPEG start/end markers and decodes them with OpenCV. This is not RTP, RTSP, or a custom packet-header protocol.
+
+`udp_ip = 0.0.0.0` is the recommended diagnostic setting because it accepts any sender. Set `udp_ip` to a specific sender IPv4 address only when you want to ignore packets from other machines. The app listens on `udp_port`; make sure that UDP port is allowed through Windows Firewall on the receiver PC.
+
+For FFmpeg sender examples, see [UDP capture over LAN](guides/udp-capture.md).
 
 ### Circle FOV
 
