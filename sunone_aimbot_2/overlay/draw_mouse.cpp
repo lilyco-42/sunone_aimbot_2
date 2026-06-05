@@ -653,7 +653,13 @@ static void draw_mouse_page(MouseSettingsPage page)
         }
         else if (config.input_method == "TEENSY41_HID")
         {
-            if (activeMouseInputOwner && activeMouseInputOwner->isOpen())
+            bool teensy41Connected = false;
+            {
+                std::lock_guard<std::mutex> lock(inputDevicesMutex);
+                teensy41Connected = activeMouseInputOwner && activeMouseInputOwner->isOpen();
+            }
+
+            if (teensy41Connected)
             {
                 ImGui::TextColored(ImVec4(0, 255, 0, 255), "Teensy 4.1 RawHID connected");
             }

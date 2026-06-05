@@ -504,17 +504,6 @@ bool DuplicationAPIScreenCapture::GetNextFrameGpu(
         return false;
     }
 
-    if (!frameCtx.hasLastPresentTime)
-    {
-        m_ddaManager->ReleaseFrame();
-        frameCtx.texture->Release();
-        SetGpuCaptureStatus(status, GpuCaptureStatus::NoPresent);
-        if (accumulatedFrames)
-            *accumulatedFrames = frameCtx.accumulatedFrames;
-        SetDdaCaptureFrameInfo(frameInfo, frameCtx);
-        return false;
-    }
-
     const int copyWidth = std::min(regionWidth, std::max(1, screenWidth));
     const int copyHeight = std::min(regionHeight, std::max(1, screenHeight));
     const int left = std::max(0, (screenWidth - copyWidth) / 2);

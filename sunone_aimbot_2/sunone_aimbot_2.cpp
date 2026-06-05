@@ -451,11 +451,18 @@ int main(int argc, char** argv)
 #else
         if (dml_detThread.joinable())
         {
-            dml_detector->shouldExit = true;
-            dml_detector->inferenceCV.notify_all();
+            if (dml_detector)
+            {
+                dml_detector->shouldExit = true;
+                dml_detector->inferenceCV.notify_all();
+            }
             dml_detThread.join();
         }
 #endif
+
+        gameOverlayShouldExit.store(true);
+        if (gameOverlayThread.joinable()) gameOverlayThread.join();
+
         mouseMovThread.join();
         overlayThread.join();
 
@@ -479,8 +486,6 @@ int main(int argc, char** argv)
         }
 #endif
 
-        gameOverlayShouldExit.store(true);
-        if (gameOverlayThread.joinable()) gameOverlayThread.join();
         if (gameOverlayPtr)
         {
             gameOverlayPtr->Stop();
