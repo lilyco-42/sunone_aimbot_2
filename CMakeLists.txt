@@ -372,6 +372,7 @@ target_compile_definitions(ai PRIVATE
     UNICODE
     _UNICODE
     _CONSOLE
+    NOMINMAX
     # C++/WinRT still includes the experimental coroutine header in C++17 mode.
     _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
 )
