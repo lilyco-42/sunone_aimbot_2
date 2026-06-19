@@ -106,12 +106,12 @@ void draw_stats()
         }
     }
 
-    if (OverlayUI::BeginSection("Time Breakdown", "stats_section_time_breakdown"))
+    if (OverlayUI::BeginSection("耗时分解", "stats_section_time_breakdown"))
     {
-        ImGui::PlotLines("Preprocess", preprocess_times, IM_ARRAYSIZE(preprocess_times), index_inf, nullptr, 0.0f, 20.0f, ImVec2(0, 40));
+        ImGui::PlotLines("预处理", preprocess_times, IM_ARRAYSIZE(preprocess_times), index_inf, nullptr, 0.0f, 20.0f, ImVec2(0, 40));
         ImGui::SameLine(); ImGui::Text("%.2f | Avg: %.2f", current_preprocess, avg_preprocess_cached);
 
-        ImGui::PlotLines("Inference", inference_times, IM_ARRAYSIZE(inference_times), index_inf, nullptr, 0.0f, 20.0f, ImVec2(0, 40));
+        ImGui::PlotLines("推理", inference_times, IM_ARRAYSIZE(inference_times), index_inf, nullptr, 0.0f, 20.0f, ImVec2(0, 40));
         ImGui::SameLine();
 
         ImGui::Text("%.2f | Avg:", current_inference);
@@ -126,10 +126,10 @@ void draw_stats()
         if (inf_slow)
             ImGui::PopStyleColor();
 
-        ImGui::PlotLines("Copy", copy_times, IM_ARRAYSIZE(copy_times), index_inf, nullptr, 0.0f, 10.0f, ImVec2(0, 40));
+        ImGui::PlotLines("复制", copy_times, IM_ARRAYSIZE(copy_times), index_inf, nullptr, 0.0f, 10.0f, ImVec2(0, 40));
         ImGui::SameLine(); ImGui::Text("%.2f | Avg: %.2f", current_copy, avg_copy_cached);
 
-        ImGui::PlotLines("Postprocess", postprocess_times, IM_ARRAYSIZE(postprocess_times), index_inf, nullptr, 0.0f, 10.0f, ImVec2(0, 40));
+        ImGui::PlotLines("后处理", postprocess_times, IM_ARRAYSIZE(postprocess_times), index_inf, nullptr, 0.0f, 10.0f, ImVec2(0, 40));
         ImGui::SameLine(); ImGui::Text("%.2f | Avg: %.2f", current_post, avg_post_cached);
 
         ImGui::PlotLines("NMS", nms_times, IM_ARRAYSIZE(nms_times), index_inf, nullptr, 0.0f, 5.0f, ImVec2(0, 40));
@@ -138,7 +138,7 @@ void draw_stats()
         OverlayUI::EndSection();
     }
 
-    if (OverlayUI::BeginSection("Capture FPS", "stats_section_capture_fps"))
+    if (OverlayUI::BeginSection("捕获帧率", "stats_section_capture_fps"))
     {
         const float fpsPlotMax = (captureUsesMonitorRefresh && cachedMonitorRefreshHz > 1.0)
             ? static_cast<float>(cachedMonitorRefreshHz)
@@ -151,7 +151,7 @@ void draw_stats()
             const float refreshHz = static_cast<float>(cachedMonitorRefreshHz);
             const float fpsLoad = std::clamp(avg_fps_cached / refreshHz, 0.0f, 1.0f);
             ImGui::Spacing();
-            ImGui::Text("Monitor load");
+            ImGui::Text("显示器负载");
             ImGui::SameLine();
             ImGui::TextDisabled("%.1f / %.1f Hz (%.0f%%)", avg_fps_cached, refreshHz, fpsLoad * 100.0f);
             ImGui::ProgressBar(fpsLoad, ImVec2(-1.0f, 18.0f), "");
@@ -178,8 +178,8 @@ void draw_stats()
     const int sourceWidth = screenWidth.load(std::memory_order_relaxed);
     const int sourceHeight = screenHeight.load(std::memory_order_relaxed);
 
-    std::string captureSource = "Unknown";
-    std::string sourceSizeLabel = "Desktop size";
+    std::string captureSource = "未知";
+    std::string sourceSizeLabel = "桌面尺寸";
     if (config.capture_method == "duplication_api")
     {
         captureSource = "Monitor " + std::to_string(std::max(0, config.monitor_idx) + 1);
@@ -189,9 +189,9 @@ void draw_stats()
         if (config.capture_target == "window")
         {
             captureSource = config.capture_window_title.empty()
-                ? "Window target is empty"
-                : "Window: " + config.capture_window_title;
-            sourceSizeLabel = "Window size";
+                ? "窗口目标为空"
+                : "窗口：" + config.capture_window_title;
+            sourceSizeLabel = "窗口尺寸";
         }
         else
         {
@@ -201,18 +201,18 @@ void draw_stats()
     else if (config.capture_method == "virtual_camera")
     {
         captureSource =
-            "Camera: " + config.virtual_camera_name + " (" +
+            "摄像头：" + config.virtual_camera_name + " (" +
             std::to_string(config.virtual_camera_width) + "x" +
             std::to_string(config.virtual_camera_heigth) + ")";
-        sourceSizeLabel = "Camera size";
+        sourceSizeLabel = "摄像头尺寸";
     }
     else if (config.capture_method == "udp_capture")
     {
         captureSource = "UDP " + config.udp_ip + ":" + std::to_string(config.udp_port);
-        sourceSizeLabel = "Stream size";
+        sourceSizeLabel = "流尺寸";
     }
 
-    if (OverlayUI::BeginSection("Capture Details", "stats_section_capture_details"))
+    if (OverlayUI::BeginSection("捕获详情", "stats_section_capture_details"))
     {
         ImGui::Text("Method: %s", config.capture_method.c_str());
         ImGui::Text("Backend: %s", config.backend.c_str());
@@ -340,13 +340,13 @@ void draw_stats()
 
             std::string directCaptureStatus;
             if (!canUseCudaCapture)
-                directCaptureStatus = "N/A (requires duplication_api)";
+                directCaptureStatus = "不可用（需要 duplication_api）";
             else if (!config.capture_use_cuda)
-                directCaptureStatus = "Disabled by user";
+                directCaptureStatus = "用户已禁用";
             else if (depthMaskEnabled)
-                directCaptureStatus = "CPU fallback (depth mask is enabled)";
+                directCaptureStatus = "CPU 回退（深度遮罩已启用）";
             else
-                directCaptureStatus = "Active";
+                directCaptureStatus = "已激活";
 
             ImGui::Separator();
             ImGui::Text("CUDA Direct Capture: %s", config.capture_use_cuda ? "enabled" : "disabled");

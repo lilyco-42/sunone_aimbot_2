@@ -224,7 +224,7 @@ inline void DrawTensorRtExportPanel(const char* id, const char* title,
     DrawActivityDots(draw, ImVec2(cardMin.x + pad + 15.0f, cardMin.y + 30.0f), static_cast<float>(ImGui::GetTime()));
 
     const float textX = cardMin.x + pad + 42.0f;
-    draw->AddText(ImVec2(textX, cardMin.y + 15.0f), IM_COL32(246, 247, 250, 255), title ? title : "TensorRT export");
+    draw->AddText(ImVec2(textX, cardMin.y + 15.0f), IM_COL32(246, 247, 250, 255), title ? title : "TensorRT 导出");
 
     std::string detail;
     if (modelName && *modelName)
@@ -237,12 +237,12 @@ inline void DrawTensorRtExportPanel(const char* id, const char* title,
     }
     else
     {
-        detail = "Building optimized engine";
+        detail = "正在构建优化引擎";
     }
     detail = FitTextToWidth(detail, width - 210.0f);
     draw->AddText(ImVec2(textX, cardMin.y + 39.0f), IM_COL32(184, 190, 200, 238), detail.c_str());
 
-    const char* stateText = snapshot.cancelRequested ? "Canceling" : (snapshot.stale ? "Working" : "Running");
+    const char* stateText = snapshot.cancelRequested ? "取消中" : (snapshot.stale ? "工作中" : "运行中");
     const ImVec2 stateSize = ImGui::CalcTextSize(stateText);
     const ImVec2 pillMin(cardMax.x - pad - stateSize.x - 22.0f, cardMin.y + 18.0f);
     const ImVec2 pillMax(cardMax.x - pad, cardMin.y + 45.0f);
@@ -261,9 +261,9 @@ inline void DrawTensorRtExportPanel(const char* id, const char* title,
     }
     else
     {
-        std::snprintf(totalLabel, sizeof(totalLabel), "Preparing");
+        std::snprintf(totalLabel, sizeof(totalLabel), "准备中");
     }
-    draw->AddText(ImVec2(innerX, y), IM_COL32(236, 236, 240, 245), "Overall progress");
+    draw->AddText(ImVec2(innerX, y), IM_COL32(236, 236, 240, 245), "总体进度");
     const float totalLabelW = ImGui::CalcTextSize(totalLabel).x;
     draw->AddText(ImVec2(innerX + innerW - totalLabelW, y), IM_COL32(186, 190, 198, 235), totalLabel);
     y += ImGui::GetTextLineHeight() + 8.0f;
@@ -272,7 +272,7 @@ inline void DrawTensorRtExportPanel(const char* id, const char* title,
 
     if (snapshot.stale)
     {
-        const char* warning = "TensorRT may spend a long time selecting tactics without reporting new steps.";
+        const char* warning = "TensorRT 可能在选择策略时花费较长时间而不报告新步骤";
         const std::string fittedWarning = FitTextToWidth(warning, innerW - 20.0f);
         draw->AddRectFilled(ImVec2(innerX, y), ImVec2(innerX + innerW, y + 23.0f), IM_COL32(70, 60, 36, 210), 5.0f);
         draw->AddText(ImVec2(innerX + 10.0f, y + 4.0f), IM_COL32(252, 225, 115, 255),
@@ -287,7 +287,7 @@ inline void DrawTensorRtExportPanel(const char* id, const char* title,
     else
     {
         draw->AddText(ImVec2(innerX, y), IM_COL32(186, 190, 198, 235),
-            subtitle && *subtitle ? subtitle : "Waiting for TensorRT to report build phases");
+            subtitle && *subtitle ? subtitle : "等待 TensorRT 报告构建阶段");
         y += 30.0f;
     }
 

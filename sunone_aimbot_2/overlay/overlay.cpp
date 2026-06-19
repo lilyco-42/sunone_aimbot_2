@@ -368,27 +368,27 @@ struct OverlayTabItem
 };
 
 static const OverlayTabItem kOverlayTabs[] = {
-    { "Capture",       "Vision",  "Frame source, monitor/window selection and preview.", draw_capture_settings,        SidebarIconKind::Camera },
-    { "AI Model",      "Vision",  "Model, backend and detector thresholds.",             draw_ai,                      SidebarIconKind::Chip },
-    { "Depth",         "Vision",  "Depth inference, masks and depth debug overlay.",     draw_depth,                   SidebarIconKind::Layers },
+    { "捕获",       "视觉",  "帧来源、显示器/窗口选择和预览", draw_capture_settings,        SidebarIconKind::Camera },
+    { "AI 模型",      "视觉",  "模型、后端和检测器阈值",             draw_ai,                      SidebarIconKind::Chip },
+    { "深度",         "视觉",  "深度推理、遮罩和深度调试覆盖",     draw_depth,                   SidebarIconKind::Layers },
 
-    { "Target",        "Aim",     "Target selection and aim point offsets.",             draw_target,                  SidebarIconKind::Crosshair },
-    { "Tracker",       "Aim",     "Current target identity lock status.",                draw_tracker,                 SidebarIconKind::Crosshair },
-    { "Movement",      "Aim",     "FOV, speed, target correction and motion profile.",   draw_mouse_movement,          SidebarIconKind::Move },
-    { "Prediction",    "Aim",     "Prediction points and Kalman filter tuning.",         draw_mouse_prediction,        SidebarIconKind::Curve },
-    { "Assist",        "Aim",     "Auto shoot, recoil compensation and assist toggles.", draw_mouse_assist,            SidebarIconKind::Spark },
-    { "Profiles",      "Aim",     "Per-game sensitivity and profile management.",        draw_mouse_profiles,          SidebarIconKind::User },
+    { "目标",        "瞄准",     "目标选择和瞄准点偏移",             draw_target,                  SidebarIconKind::Crosshair },
+    { "追踪器",       "瞄准",     "当前目标锁定状态",                draw_tracker,                 SidebarIconKind::Crosshair },
+    { "移动",      "瞄准",     "视野、速度、目标修正和移动配置",   draw_mouse_movement,          SidebarIconKind::Move },
+    { "预测",    "瞄准",     "预测点和卡尔曼滤波器调优",         draw_mouse_prediction,        SidebarIconKind::Curve },
+    { "辅助",        "瞄准",     "自动射击、后坐力补偿和辅助开关", draw_mouse_assist,            SidebarIconKind::Spark },
+    { "配置",      "瞄准",     "各游戏灵敏度和配置管理",        draw_mouse_profiles,          SidebarIconKind::User },
 
-    { "Input Device",  "Control", "Mouse backend, device connection and reconnect data.",draw_mouse_input,             SidebarIconKind::Mouse },
-    { "Hotkeys",       "Control", "Bindings for aiming, shooting and runtime actions.",  draw_buttons,                 SidebarIconKind::Keyboard },
-    { "Overlay",       "Control", "Overlay appearance and privacy options.",             draw_overlay,                 SidebarIconKind::Sliders },
+    { "输入设备",  "控制", "鼠标后端、设备连接和重连数据",draw_mouse_input,             SidebarIconKind::Mouse },
+    { "热键",       "控制", "瞄准、射击和运行时操作绑定",  draw_buttons,                 SidebarIconKind::Keyboard },
+    { "覆盖层",       "控制", "覆盖层外观和隐私选项",             draw_overlay,                 SidebarIconKind::Sliders },
 
-    { "Game Render",   "Visuals", "In-game overlay lifetime, FPS and render toggles.",   draw_game_overlay_general,    SidebarIconKind::Monitor },
-    { "Render Style",  "Visuals", "Boxes, capture frame and future point styling.",      draw_game_overlay_visuals,    SidebarIconKind::Palette },
-    { "Icon Overlay",  "Visuals", "Per-target icon image, size, anchor and class filter.",draw_game_overlay_icon,      SidebarIconKind::Image },
+    { "游戏渲染",   "显示", "游戏内覆盖层生命周期、帧率和渲染开关",   draw_game_overlay_general,    SidebarIconKind::Monitor },
+    { "渲染样式",  "显示", "检测框、捕获范围和预测点样式",      draw_game_overlay_visuals,    SidebarIconKind::Palette },
+    { "图标覆盖",  "显示", "每个目标的图标图像、大小、锚点和类别过滤",draw_game_overlay_icon,      SidebarIconKind::Image },
 
-    { "Stats",         "Monitor", "Performance, capture source and timing graphs.",      draw_stats,                   SidebarIconKind::Bars },
-    { "Debug",         "Monitor", "Screenshots, data collection and diagnostics.",        draw_debug,                   SidebarIconKind::Debug },
+    { "统计",         "监控", "性能、捕获来源和时间图表",      draw_stats,                   SidebarIconKind::Bars },
+    { "调试",         "监控", "截图、数据采集和诊断信息",        draw_debug,                   SidebarIconKind::Debug },
 };
 
 static void DrawMainPanelBackground(const ImVec2& pos, const ImVec2& size)
@@ -414,10 +414,10 @@ static void DrawSidebarTitle()
 static void DrawSidebarIcon(ImDrawList* draw, SidebarIconKind icon, const char* group, const ImVec2& pos, bool selected)
 {
     const ImU32 color = selected ? IM_COL32(96, 205, 255, 255) :
-        (std::strcmp(group, "Vision") == 0 ? IM_COL32(84, 182, 255, 230) :
-         std::strcmp(group, "Aim") == 0 ? IM_COL32(255, 189, 92, 230) :
-         std::strcmp(group, "Control") == 0 ? IM_COL32(71, 214, 190, 230) :
-         std::strcmp(group, "Visuals") == 0 ? IM_COL32(178, 143, 255, 230) :
+        (std::strcmp(group, "视觉") == 0 ? IM_COL32(84, 182, 255, 230) :
+         std::strcmp(group, "瞄准") == 0 ? IM_COL32(255, 189, 92, 230) :
+         std::strcmp(group, "控制") == 0 ? IM_COL32(71, 214, 190, 230) :
+         std::strcmp(group, "显示") == 0 ? IM_COL32(178, 143, 255, 230) :
          IM_COL32(205, 213, 224, 230));
 
     const float x = pos.x;
@@ -1165,7 +1165,26 @@ void SetupImGui()
     fontConfig.OversampleH = 3;
     fontConfig.OversampleV = 2;
     fontConfig.PixelSnapH = true;
-    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisb.ttf", 16.5f, &fontConfig) &&
+
+    // Build glyph ranges: Default Latin + Chinese Simplified for CJK UI text.
+    // Must be static — ImGui stores a raw pointer and builds the atlas on first frame.
+    static ImVector<ImWchar> glyphRanges;
+    if (glyphRanges.empty())
+    {
+        ImFontGlyphRangesBuilder rangesBuilder;
+        rangesBuilder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+        rangesBuilder.AddRanges(io.Fonts->GetGlyphRangesChineseFull());
+        rangesBuilder.BuildRanges(&glyphRanges);
+    }
+    fontConfig.GlyphRanges = glyphRanges.Data;
+
+    // Try fonts with native CJK glyphs first (SimHei, Microsoft YaHei via simhei),
+    // then fall back to Segoe UI (lacks CJK, will show boxes).
+    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\simhei.ttf", 16.5f, &fontConfig) &&
+        !io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\Deng.ttf", 16.5f, &fontConfig) &&
+        !io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\simkai.ttf", 16.5f, &fontConfig) &&
+        !io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\simfang.ttf", 16.5f, &fontConfig) &&
+        !io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\seguisb.ttf", 16.5f, &fontConfig) &&
         !io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\SegUIVar.ttf", 16.5f, &fontConfig) &&
         !io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 16.5f, &fontConfig))
     {
@@ -1386,7 +1405,7 @@ void OverlayThread()
 {
     if (!CreateOverlayWindow())
     {
-        std::cout << "[Overlay] Can't create overlay window!" << std::endl;
+        std::cout << "[Overlay] 无法创建覆盖层窗口！" << std::endl;
         return;
     }
 

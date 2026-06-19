@@ -659,11 +659,11 @@ bool Config::saveConfig(const std::string& filename)
         return false;
     }
 
-    file << "# An explanation of the options can be found at:\n";
+    file << "# 选项说明参见：\n";
     file << "# https://github.com/SunOner/sunone_aimbot_2/blob/main/docs/config.md\n\n";
 
     // Capture
-    file << "# Capture\n"
+    file << "# 捕获\n"
         << "capture_method = " << capture_method << "\n"
         << "capture_target = " << capture_target << "\n"
         << "capture_window_title = " << capture_window_title << "\n"
@@ -682,7 +682,7 @@ bool Config::saveConfig(const std::string& filename)
         << "virtual_camera_heigth = " << virtual_camera_heigth << "\n\n";
 
     // Target
-    file << "# Target\n"
+    file << "# 目标\n"
         << "disable_headshot = " << (disable_headshot ? "true" : "false") << "\n"
         << std::fixed << std::setprecision(2)
         << "body_y_offset = " << body_y_offset << "\n"
@@ -692,7 +692,7 @@ bool Config::saveConfig(const std::string& filename)
         << "tracker_overlay_table_enabled = " << (tracker_overlay_table_enabled ? "true" : "false") << "\n\n";
 
     // Mouse
-    file << "# Mouse move\n"
+    file << "# 鼠标移动\n"
         << "fovX = " << fovX << "\n"
         << "fovY = " << fovY << "\n"
         << "minSpeedMultiplier = " << minSpeedMultiplier << "\n"
@@ -729,7 +729,7 @@ bool Config::saveConfig(const std::string& filename)
         << "input_method = " << input_method << "\n\n";
 
     // Wind mouse
-    file << "# Wind mouse\n"
+    file << "# 风动鼠标\n"
         << "wind_mouse_enabled = " << (wind_mouse_enabled ? "true" : "false") << "\n"
         << "wind_G = " << wind_G << "\n"
         << "wind_W = " << wind_W << "\n"
@@ -750,7 +750,7 @@ bool Config::saveConfig(const std::string& filename)
         << "rp2350_16_bit_mouse = " << (rp2350_16_bit_mouse ? "true" : "false") << "\n"
         << "rp2350_enable_keys = " << (rp2350_enable_keys ? "true" : "false") << "\n\n";
 
-    file << "# Teensy 4.1 RawHID generic mouse bridge\n"
+    file << "# Teensy 4.1 RawHID 通用鼠标桥接\n"
         << "teensy_hid_serial = " << teensy_hid_serial << "\n"
         << "teensy_hid_vid_filter = " << teensy_hid_vid_filter << "\n"
         << "teensy_hid_pid_filter = " << teensy_hid_pid_filter << "\n"
@@ -775,7 +775,7 @@ bool Config::saveConfig(const std::string& filename)
 		<< "makcu_port = " << makcu_port << "\n\n";
 
     // Mouse shooting
-    file << "# Mouse shooting\n"
+    file << "# 鼠标射击\n"
         << "auto_shoot = " << (auto_shoot ? "true" : "false") << "\n"
         << std::fixed << std::setprecision(1)
         << "bScope_multiplier = " << bScope_multiplier << "\n\n";
@@ -809,12 +809,12 @@ bool Config::saveConfig(const std::string& filename)
 #endif
 
 	// System
-    file << "# System\n"
+    file << "# 系统\n"
         << "cpuCoreReserveCount = " << cpuCoreReserveCount << "\n"
         << "systemMemoryReserveMB = " << systemMemoryReserveMB << "\n\n";
 
     // Buttons
-    file << "# Buttons\n"
+    file << "# 按钮\n"
         << "button_targeting = " << joinStrings(button_targeting) << "\n"
         << "button_shoot = " << joinStrings(button_shoot) << "\n"
         << "button_zoom = " << joinStrings(button_zoom) << "\n"
@@ -825,7 +825,7 @@ bool Config::saveConfig(const std::string& filename)
         << "enable_arrows_settings = " << (enable_arrows_settings ? "true" : "false") << "\n\n";
 
     // Overlay
-    file << "# Overlay\n"
+    file << "# 覆盖层\n"
         << "overlay_opacity = " << overlay_opacity << "\n"
         << std::fixed << std::setprecision(2)
         << "overlay_ui_scale = " << overlay_ui_scale << "\n"
@@ -836,7 +836,7 @@ bool Config::saveConfig(const std::string& filename)
         << "overlay_width = " << overlay_width << "\n"
         << "overlay_height = " << overlay_height << "\n\n";
 
-    file << "# Depth\n"
+    file << "# 深度\n"
         << "depth_inference_enabled = " << (depth_inference_enabled ? "true" : "false") << "\n"
         << "depth_model_path = " << depth_model_path << "\n"
         << "depth_fps = " << depth_fps << "\n"
@@ -850,7 +850,7 @@ bool Config::saveConfig(const std::string& filename)
         << "depth_mask_invert = " << (depth_mask_invert ? "true" : "false") << "\n"
         << "depth_debug_overlay_enabled = " << (depth_debug_overlay_enabled ? "true" : "false") << "\n\n";
 
-    file << "# Game Overlay\n"
+    file << "# 游戏覆盖层\n"
         << "game_overlay_enabled = " << (game_overlay_enabled ? "true" : "false") << "\n"
         << "game_overlay_max_fps = " << game_overlay_max_fps << "\n"
         << "game_overlay_draw_boxes = " << (game_overlay_draw_boxes ? "true" : "false") << "\n"
@@ -885,7 +885,7 @@ bool Config::saveConfig(const std::string& filename)
         << "game_overlay_icon_anchor = " << game_overlay_icon_anchor << "\n"
         << "game_overlay_icon_class = " << game_overlay_icon_class << "\n\n";
 
-    file << "# Data Collection\n"
+    file << "# 数据采集\n"
         << "collect_data_while_playing = " << (collect_data_while_playing ? "true" : "false") << "\n"
         << "collect_only_when_aimbot_running = " << (collect_only_when_aimbot_running ? "true" : "false") << "\n"
         << "collect_only_when_targets_present = " << (collect_only_when_targets_present ? "true" : "false") << "\n"
@@ -900,12 +900,12 @@ bool Config::saveConfig(const std::string& filename)
         << "auto_label_record_classes = " << auto_label_record_classes << "\n\n";
 
     // Classes
-    file << "# Custom Classes\n"
+    file << "# 自定义类别\n"
         << "class_player = " << class_player << "\n"
         << "class_head = " << class_head << "\n\n";
 
     // Debug
-    file << "# Debug\n"
+    file << "# 调试\n"
         << "show_window = " << (show_window ? "true" : "false") << "\n"
         << "show_fps = " << (show_fps ? "true" : "false") << "\n"
         << "screenshot_button = " << joinStrings(screenshot_button) << "\n"
@@ -913,7 +913,7 @@ bool Config::saveConfig(const std::string& filename)
         << "verbose = " << (verbose ? "true" : "false") << "\n\n";
 
     // Active game
-    file << "# Active game profile\n";
+    file << "# 当前游戏配置\n";
     file << "active_game = " << active_game << "\n\n";
     file << std::defaultfloat << std::setprecision(6);
     file << "[Games]\n";

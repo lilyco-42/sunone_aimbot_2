@@ -67,28 +67,28 @@ bool shouldDrawMousePage(MouseSettingsPage current, MouseSettingsPage wanted)
 static void draw_mouse_page(MouseSettingsPage page)
 {
     if (shouldDrawMousePage(page, MouseSettingsPage::Movement) &&
-        OverlayUI::BeginSection("FOV", "mouse_section_fov"))
+        OverlayUI::BeginSection("视野", "mouse_section_fov"))
     {
-        OverlayUI::SliderIntRow("FOV X", &config.fovX, 10, 120);
-        OverlayUI::SliderIntRow("FOV Y", &config.fovY, 10, 120);
+        OverlayUI::SliderIntRow("视野 X", &config.fovX, 10, 120);
+        OverlayUI::SliderIntRow("视野 Y", &config.fovY, 10, 120);
         OverlayUI::EndSection();
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Movement) &&
-        OverlayUI::BeginSection("Speed Multiplier", "mouse_section_speed_multiplier"))
+        OverlayUI::BeginSection("速度系数", "mouse_section_speed_multiplier"))
     {
-        OverlayUI::SliderFloatRow("Min Speed Multiplier", &config.minSpeedMultiplier, 0.1f, 5.0f, "%.1f");
-        OverlayUI::SliderFloatRow("Max Speed Multiplier", &config.maxSpeedMultiplier, 0.1f, 5.0f, "%.1f");
+        OverlayUI::SliderFloatRow("最小速度系数", &config.minSpeedMultiplier, 0.1f, 5.0f, "%.1f");
+        OverlayUI::SliderFloatRow("最大速度系数", &config.maxSpeedMultiplier, 0.1f, 5.0f, "%.1f");
         OverlayUI::EndSection();
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Prediction) &&
-        OverlayUI::BeginSection("Prediction", "mouse_section_prediction"))
+        OverlayUI::BeginSection("预测", "mouse_section_prediction"))
     {
-        OverlayUI::SliderFloatRow("Prediction Interval", &config.predictionInterval, 0.00f, 0.5f, "%.2f");
+        OverlayUI::SliderFloatRow("预测间隔", &config.predictionInterval, 0.00f, 0.5f, "%.2f");
         if (config.predictionInterval == 0.00f)
         {
-            OverlayUI::TextRow("Prediction is disabled.", IM_COL32(255, 108, 108, 255));
+            OverlayUI::TextRow("预测已禁用", IM_COL32(255, 108, 108, 255));
         }
 
         const bool predictionEnabled = (config.predictionInterval > 0.0f);
@@ -97,12 +97,12 @@ static void draw_mouse_page(MouseSettingsPage page)
             ImGui::BeginDisabled();
         }
         
-        if (OverlayUI::SliderIntRow("Future Positions", &config.prediction_futurePositions, 1, 40))
+        if (OverlayUI::SliderIntRow("未来位置", &config.prediction_futurePositions, 1, 40))
         {
             OverlayConfig_MarkDirty();
         }
         
-        if (OverlayUI::CheckboxRow("Draw Future Positions", &config.draw_futurePositions))
+        if (OverlayUI::CheckboxRow("绘制未来位置", &config.draw_futurePositions))
         {
             OverlayConfig_MarkDirty();
         }
@@ -110,56 +110,56 @@ static void draw_mouse_page(MouseSettingsPage page)
         if (!predictionEnabled)
         {
             ImGui::EndDisabled();
-            ImGui::TextDisabled("Enable Prediction Interval (> 0) to edit this section.");
+            ImGui::TextDisabled("启用预测间隔 (> 0) 以编辑此部分");
         }
 
         ImGui::Separator();
-        if (OverlayUI::CheckboxRow("Enable Kalman Filter", &config.kalman_enabled))
+        if (OverlayUI::CheckboxRow("启用卡尔曼滤波", &config.kalman_enabled))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Kalman Process Noise Pos", &config.kalman_process_noise_position, 0.001f, 5000.0f, "%.3f"))
+        if (OverlayUI::SliderFloatRow("卡尔曼过程噪声位置", &config.kalman_process_noise_position, 0.001f, 5000.0f, "%.3f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Kalman Process Noise Vel", &config.kalman_process_noise_velocity, 0.001f, 50000.0f, "%.3f"))
+        if (OverlayUI::SliderFloatRow("卡尔曼过程噪声速度", &config.kalman_process_noise_velocity, 0.001f, 50000.0f, "%.3f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Kalman Measurement Noise", &config.kalman_measurement_noise, 0.001f, 5000.0f, "%.3f"))
+        if (OverlayUI::SliderFloatRow("卡尔曼测量噪声", &config.kalman_measurement_noise, 0.001f, 5000.0f, "%.3f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Kalman Velocity Damping", &config.kalman_velocity_damping, 0.0f, 3.0f, "%.3f"))
+        if (OverlayUI::SliderFloatRow("卡尔曼速度阻尼", &config.kalman_velocity_damping, 0.0f, 3.0f, "%.3f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Kalman Max Velocity", &config.kalman_max_velocity, 100.0f, 60000.0f, "%.0f"))
+        if (OverlayUI::SliderFloatRow("卡尔曼最大速度", &config.kalman_max_velocity, 100.0f, 60000.0f, "%.0f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderIntRow("Kalman Warmup Frames", &config.kalman_warmup_frames, 0, 20))
+        if (OverlayUI::SliderIntRow("卡尔曼预热帧数", &config.kalman_warmup_frames, 0, 20))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::CheckboxRow("Kalman Compensate Inference Delay", &config.kalman_compensate_detection_delay))
+        if (OverlayUI::CheckboxRow("卡尔曼补偿推理延迟", &config.kalman_compensate_detection_delay))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Kalman Additional Predict (ms)", &config.kalman_additional_prediction_ms, -80.0f, 120.0f, "%.1f"))
+        if (OverlayUI::SliderFloatRow("卡尔曼额外预测 (ms)", &config.kalman_additional_prediction_ms, -80.0f, 120.0f, "%.1f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Kalman Reset Timeout (s)", &config.kalman_reset_timeout_sec, 0.05f, 3.0f, "%.2f"))
+        if (OverlayUI::SliderFloatRow("卡尔曼重置超时 (s)", &config.kalman_reset_timeout_sec, 0.05f, 3.0f, "%.2f"))
         {
             OverlayConfig_MarkDirty();
         }
@@ -168,17 +168,17 @@ static void draw_mouse_page(MouseSettingsPage page)
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Movement) &&
-        OverlayUI::BeginSection("Target correction", "mouse_section_target_correction"))
+        OverlayUI::BeginSection("目标修正", "mouse_section_target_correction"))
     {
-        OverlayUI::SliderFloatRow("Snap Radius", &config.snapRadius, 0.1f, 5.0f, "%.1f");
-        OverlayUI::SliderFloatRow("Near Radius", &config.nearRadius, 1.0f, 40.0f, "%.1f");
-        OverlayUI::SliderFloatRow("Speed Curve Exponent", &config.speedCurveExponent, 0.1f, 10.0f, "%.1f");
-        OverlayUI::SliderFloatRow("Snap Boost Factor", &config.snapBoostFactor, 0.01f, 4.00f, "%.2f");
+        OverlayUI::SliderFloatRow("吸附半径", &config.snapRadius, 0.1f, 5.0f, "%.1f");
+        OverlayUI::SliderFloatRow("近距半径", &config.nearRadius, 1.0f, 40.0f, "%.1f");
+        OverlayUI::SliderFloatRow("速度曲线指数", &config.speedCurveExponent, 0.1f, 10.0f, "%.1f");
+        OverlayUI::SliderFloatRow("吸附增强系数", &config.snapBoostFactor, 0.01f, 4.00f, "%.2f");
         OverlayUI::EndSection();
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Profiles) &&
-        OverlayUI::BeginSection("Game Profile", "mouse_section_game_profile"))
+        OverlayUI::BeginSection("游戏配置", "mouse_section_game_profile"))
     {
         std::vector<std::string> profile_names;
         for (const auto& kv : config.game_profiles)
@@ -199,7 +199,7 @@ static void draw_mouse_page(MouseSettingsPage page)
         for (const auto& name : profile_names)
             profile_items.push_back(name.c_str());
 
-        if (OverlayUI::ComboRow("Active Game Profile", &selected_index, profile_items.data(), static_cast<int>(profile_items.size())))
+        if (OverlayUI::ComboRow("当前游戏配置", &selected_index, profile_items.data(), static_cast<int>(profile_items.size())))
         {
             config.active_game = profile_names[selected_index];
             OverlayConfig_MarkDirty();
@@ -233,14 +233,14 @@ static void draw_mouse_page(MouseSettingsPage page)
             float pitch_f = static_cast<float>(modifiable.pitch);
             float baseFOV_f = static_cast<float>(modifiable.baseFOV);
 
-            changed |= OverlayUI::SliderFloatRow("Sensitivity", &sens_f, 0.001f, 10.0f, "%.4f");
-            changed |= OverlayUI::SliderFloatRow("Yaw", &yaw_f, 0.001f, 0.1f, "%.4f");
-            changed |= OverlayUI::SliderFloatRow("Pitch", &pitch_f, 0.001f, 0.1f, "%.4f");
+            changed |= OverlayUI::SliderFloatRow("灵敏度", &sens_f, 0.001f, 10.0f, "%.4f");
+            changed |= OverlayUI::SliderFloatRow("偏航", &yaw_f, 0.001f, 0.1f, "%.4f");
+            changed |= OverlayUI::SliderFloatRow("俯仰", &pitch_f, 0.001f, 0.1f, "%.4f");
 
-            changed |= OverlayUI::CheckboxRow("FOV Scaled", &modifiable.fovScaled);
+            changed |= OverlayUI::CheckboxRow("视野缩放", &modifiable.fovScaled);
             if (modifiable.fovScaled)
             {
-                changed |= OverlayUI::SliderFloatRow("Base FOV", &baseFOV_f, 10.0f, 180.0f, "%.1f");
+                changed |= OverlayUI::SliderFloatRow("基础视野", &baseFOV_f, 10.0f, 180.0f, "%.1f");
             }
 
             if (changed)
@@ -260,18 +260,18 @@ static void draw_mouse_page(MouseSettingsPage page)
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Profiles) &&
-        OverlayUI::BeginSection("Manage Profiles", "mouse_section_manage_profiles"))
+        OverlayUI::BeginSection("管理配置", "mouse_section_manage_profiles"))
     {
         static char new_profile_name[64] = "";
         bool addProfile = false;
         {
-            const auto row = OverlayUI::BeginSettingRow("New profile name");
+            const auto row = OverlayUI::BeginSettingRow("新配置名称");
             const float buttonW = 96.0f;
             const float inputW = std::max(1.0f, row.controlWidth - buttonW - ImGui::GetStyle().ItemSpacing.x);
             ImGui::SetNextItemWidth(inputW);
             ImGui::InputText("##value", new_profile_name, sizeof(new_profile_name));
             ImGui::SameLine();
-            addProfile = ImGui::Button("Add", ImVec2(buttonW, 0.0f));
+            addProfile = ImGui::Button("添加", ImVec2(buttonW, 0.0f));
             OverlayUI::EndSettingRow(row);
         }
         if (addProfile)
@@ -297,7 +297,7 @@ static void draw_mouse_page(MouseSettingsPage page)
         if (gp.name != "UNIFIED")
         {
             ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(200, 50, 50, 255));
-            if (OverlayUI::ButtonRow("Profile", "Delete Current Profile", "delete_current_profile"))
+            if (OverlayUI::ButtonRow("Profile", "删除当前配置", "delete_current_profile"))
             {
                 config.game_profiles.erase(gp.name);
                 if (config.game_profiles.count("UNIFIED") != 0)
@@ -316,9 +316,9 @@ static void draw_mouse_page(MouseSettingsPage page)
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Assist) &&
-        OverlayUI::BeginSection("Easy No Recoil", "mouse_section_easy_no_recoil"))
+        OverlayUI::BeginSection("简易无后坐力", "mouse_section_easy_no_recoil"))
     {
-        if (OverlayUI::CheckboxRow("Easy No Recoil", &config.easynorecoil))
+        if (OverlayUI::CheckboxRow("简易无后坐力", &config.easynorecoil))
         {
             OverlayConfig_MarkDirty();
         }
@@ -328,51 +328,51 @@ static void draw_mouse_page(MouseSettingsPage page)
             ImGui::BeginDisabled();
         }
 
-        if (OverlayUI::SliderFloatRow("No Recoil Strength", &config.easynorecoilstrength, 0.1f, 500.0f, "%.1f"))
+        if (OverlayUI::SliderFloatRow("无后坐力强度", &config.easynorecoilstrength, 0.1f, 500.0f, "%.1f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Left/Right Arrow keys: Adjust recoil strength by 10");
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "左右方向键：调整后坐力强度 ±10");
 
         if (config.easynorecoilstrength >= 100.0f)
         {
-            ImGui::TextColored(ImVec4(255, 255, 0, 255), "WARNING: High recoil strength may be detected.");
+            ImGui::TextColored(ImVec4(255, 255, 0, 255), "警告：高后坐力强度可能被检测");
         }
 
         if (!config.easynorecoil)
         {
             ImGui::EndDisabled();
-            ImGui::TextDisabled("Enable Easy No Recoil to edit settings.");
+            ImGui::TextDisabled("启用简易无后坐力以编辑设置");
         }
 
         OverlayUI::EndSection();
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Assist) &&
-        OverlayUI::BeginSection("Auto Shoot", "mouse_section_auto_shoot"))
+        OverlayUI::BeginSection("自动射击", "mouse_section_auto_shoot"))
     {
-        OverlayUI::CheckboxRow("Auto Shoot", &config.auto_shoot);
+        OverlayUI::CheckboxRow("自动射击", &config.auto_shoot);
         if (!config.auto_shoot)
         {
             ImGui::BeginDisabled();
         }
 
-        OverlayUI::SliderFloatRow("bScope Multiplier", &config.bScope_multiplier, 0.5f, 2.0f, "%.1f");
+        OverlayUI::SliderFloatRow("瞄准镜系数", &config.bScope_multiplier, 0.5f, 2.0f, "%.1f");
 
         if (!config.auto_shoot)
         {
             ImGui::EndDisabled();
-            ImGui::TextDisabled("Enable Auto Shoot to edit settings.");
+            ImGui::TextDisabled("启用自动射击以编辑设置");
         }
 
         OverlayUI::EndSection();
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Movement) &&
-        OverlayUI::BeginSection("Wind Mouse", "mouse_section_wind_mouse"))
+        OverlayUI::BeginSection("风动鼠标", "mouse_section_wind_mouse"))
     {
-        if (OverlayUI::CheckboxRow("Enable WindMouse", &config.wind_mouse_enabled))
+        if (OverlayUI::CheckboxRow("启用风动鼠标", &config.wind_mouse_enabled))
         {
             OverlayConfig_MarkDirty();
         }
@@ -382,27 +382,27 @@ static void draw_mouse_page(MouseSettingsPage page)
             ImGui::BeginDisabled();
         }
 
-        if (OverlayUI::SliderFloatRow("Gravity force", &config.wind_G, 4.00f, 40.00f, "%.2f"))
+        if (OverlayUI::SliderFloatRow("重力", &config.wind_G, 4.00f, 40.00f, "%.2f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Wind fluctuation", &config.wind_W, 1.00f, 40.00f, "%.2f"))
+        if (OverlayUI::SliderFloatRow("风力波动", &config.wind_W, 1.00f, 40.00f, "%.2f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Max step (velocity clip)", &config.wind_M, 1.00f, 40.00f, "%.2f"))
+        if (OverlayUI::SliderFloatRow("最大步长（速度限制）", &config.wind_M, 1.00f, 40.00f, "%.2f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::SliderFloatRow("Distance where behaviour changes", &config.wind_D, 1.00f, 40.00f, "%.2f"))
+        if (OverlayUI::SliderFloatRow("行为变化距离", &config.wind_D, 1.00f, 40.00f, "%.2f"))
         {
             OverlayConfig_MarkDirty();
         }
 
-        if (OverlayUI::ButtonRow("Wind Mouse", "Reset to defaults", "reset_wind_mouse_defaults"))
+        if (OverlayUI::ButtonRow("风动鼠标", "重置默认值", "reset_wind_mouse_defaults"))
         {
             config.wind_G = 18.0f;
             config.wind_W = 15.0f;
@@ -414,14 +414,14 @@ static void draw_mouse_page(MouseSettingsPage page)
         if (!config.wind_mouse_enabled)
         {
             ImGui::EndDisabled();
-            ImGui::TextDisabled("Enable WindMouse to edit settings.");
+            ImGui::TextDisabled("启用风动鼠标以编辑设置");
         }
 
         OverlayUI::EndSection();
     }
 
     if (shouldDrawMousePage(page, MouseSettingsPage::Input) &&
-        OverlayUI::BeginSection("Input Method", "mouse_section_input_method"))
+        OverlayUI::BeginSection("输入方式", "mouse_section_input_method"))
     {
         std::vector<std::string> input_methods = { "WIN32", "GHUB", "RAZER", "ARDUINO", "RP2350", "TEENSY41", "TEENSY41_HID", "KMBOX_NET", "KMBOX_A", "MAKCU" };
 
@@ -442,7 +442,7 @@ static void draw_mouse_page(MouseSettingsPage page)
             }
         }
 
-        if (OverlayUI::ComboRow("Mouse Input Method", &input_method_index, method_items.data(), static_cast<int>(method_items.size())))
+        if (OverlayUI::ComboRow("鼠标输入方式", &input_method_index, method_items.data(), static_cast<int>(method_items.size())))
         {
             std::string new_input_method = input_methods[input_method_index];
 
@@ -460,11 +460,11 @@ static void draw_mouse_page(MouseSettingsPage page)
             {
                 if (arduinoSerial->isOpen())
                 {
-                    ImGui::TextColored(ImVec4(0, 255, 0, 255), config.input_method == "TEENSY41" ? "Teensy 4.1 connected" : "Arduino connected");
+                    ImGui::TextColored(ImVec4(0, 255, 0, 255), config.input_method == "TEENSY41" ? "Teensy 4.1 已连接" : "Arduino 已连接");
                 }
                 else
                 {
-                    ImGui::TextColored(ImVec4(255, 0, 0, 255), config.input_method == "TEENSY41" ? "Teensy 4.1 not connected" : "Arduino not connected");
+                    ImGui::TextColored(ImVec4(255, 0, 0, 255), config.input_method == "TEENSY41" ? "Teensy 4.1 未连接" : "Arduino 未连接");
                 }
             }
 
@@ -491,7 +491,7 @@ static void draw_mouse_page(MouseSettingsPage page)
                 }
             }
 
-            if (OverlayUI::ComboRow(config.input_method == "TEENSY41" ? "Teensy Port" : "Arduino Port", &port_index, port_items.data(), static_cast<int>(port_items.size())))
+            if (OverlayUI::ComboRow(config.input_method == "TEENSY41" ? "Teensy 端口" : "Arduino 端口", &port_index, port_items.data(), static_cast<int>(port_items.size())))
             {
                 config.arduino_port = port_list[port_index];
                 OverlayConfig_MarkDirty();
@@ -522,7 +522,7 @@ static void draw_mouse_page(MouseSettingsPage page)
                 }
             }
 
-            if (OverlayUI::ComboRow(config.input_method == "TEENSY41" ? "Teensy Baudrate" : "Arduino Baudrate", &baud_rate_index, baud_rate_items.data(), static_cast<int>(baud_rate_items.size())))
+            if (OverlayUI::ComboRow(config.input_method == "TEENSY41" ? "Teensy 波特率" : "Arduino 波特率", &baud_rate_index, baud_rate_items.data(), static_cast<int>(baud_rate_items.size())))
             {
                 config.arduino_baudrate = baud_rate_list[baud_rate_index];
                 OverlayConfig_MarkDirty();
@@ -535,12 +535,12 @@ static void draw_mouse_page(MouseSettingsPage page)
             }
             else
             {
-                if (OverlayUI::CheckboxRow("Arduino 16-bit Mouse", &config.arduino_16_bit_mouse))
+                if (OverlayUI::CheckboxRow("Arduino 16位鼠标", &config.arduino_16_bit_mouse))
                 {
                     OverlayConfig_MarkDirty();
                     input_method_changed.store(true);
                 }
-                if (OverlayUI::CheckboxRow("Arduino Enable Keys", &config.arduino_enable_keys))
+                if (OverlayUI::CheckboxRow("Arduino 启用按键", &config.arduino_enable_keys))
                 {
                     OverlayConfig_MarkDirty();
                     input_method_changed.store(true);
@@ -553,11 +553,11 @@ static void draw_mouse_page(MouseSettingsPage page)
             {
                 if (rp2350Serial->isOpen())
                 {
-                    ImGui::TextColored(ImVec4(0, 255, 0, 255), "RP2350 connected");
+                    ImGui::TextColored(ImVec4(0, 255, 0, 255), "RP2350 已连接");
                 }
                 else
                 {
-                    ImGui::TextColored(ImVec4(255, 0, 0, 255), "RP2350 not connected");
+                    ImGui::TextColored(ImVec4(255, 0, 0, 255), "RP2350 未连接");
                 }
             }
 
@@ -584,7 +584,7 @@ static void draw_mouse_page(MouseSettingsPage page)
                 }
             }
 
-            if (OverlayUI::ComboRow("RP2350 Port", &port_index, port_items.data(), static_cast<int>(port_items.size())))
+            if (OverlayUI::ComboRow("RP2350 端口", &port_index, port_items.data(), static_cast<int>(port_items.size())))
             {
                 config.rp2350_port = port_list[port_index];
                 OverlayConfig_MarkDirty();
@@ -615,19 +615,19 @@ static void draw_mouse_page(MouseSettingsPage page)
                 }
             }
 
-            if (OverlayUI::ComboRow("RP2350 Baudrate", &baud_rate_index, baud_rate_items.data(), static_cast<int>(baud_rate_items.size())))
+            if (OverlayUI::ComboRow("RP2350 波特率", &baud_rate_index, baud_rate_items.data(), static_cast<int>(baud_rate_items.size())))
             {
                 config.rp2350_baudrate = baud_rate_list[baud_rate_index];
                 OverlayConfig_MarkDirty();
                 input_method_changed.store(true);
             }
 
-            if (OverlayUI::CheckboxRow("RP2350 16-bit Mouse", &config.rp2350_16_bit_mouse))
+            if (OverlayUI::CheckboxRow("RP2350 16位鼠标", &config.rp2350_16_bit_mouse))
             {
                 OverlayConfig_MarkDirty();
                 input_method_changed.store(true);
             }
-            if (OverlayUI::CheckboxRow("RP2350 Enable Keys", &config.rp2350_enable_keys))
+            if (OverlayUI::CheckboxRow("RP2350 启用按键", &config.rp2350_enable_keys))
             {
                 OverlayConfig_MarkDirty();
                 input_method_changed.store(true);
@@ -637,19 +637,19 @@ static void draw_mouse_page(MouseSettingsPage page)
         {
             if (ghub_version == "13.1.4")
             {
-                std::string ghub_version_label = "The correct version of Ghub is installed: " + ghub_version;
+                std::string ghub_version_label = "GHub 正确版本已安装：" + ghub_version;
                 ImGui::Text(ghub_version_label.c_str());
             }
             else
             {
-                ImGui::Text("The wrong version of Ghub is installed or the path to Ghub is not set by default.\nDefault system path: C:\\Program Files\\LGHUB");
-                if (OverlayUI::ButtonRow("GHub", "Open GHub Docs", "ghub_docs"))
+                ImGui::Text("GHub 版本不正确或默认路径未设置\n默认系统路径：C:\\Program Files\\LGHUB");
+                if (OverlayUI::ButtonRow("GHub", "打开 GHub 文档", "ghub_docs"))
                 {
                     ShellExecute(0, 0, L"https://github.com/SunOner/sunone_aimbot_2/blob/main/docs/guides.md#g-hub-input-method", 0, 0, SW_SHOW);
                 }
             }
 
-            ImGui::TextColored(ImVec4(255, 0, 0, 255), "Use at your own risk, the method is detected in some games.");
+            ImGui::TextColored(ImVec4(255, 0, 0, 255), "风险自负，此方法在某些游戏中被检测");
         }
         else if (config.input_method == "TEENSY41_HID")
         {
@@ -661,11 +661,11 @@ static void draw_mouse_page(MouseSettingsPage page)
 
             if (teensy41Connected)
             {
-                ImGui::TextColored(ImVec4(0, 255, 0, 255), "Teensy 4.1 RawHID connected");
+                ImGui::TextColored(ImVec4(0, 255, 0, 255), "Teensy 4.1 RawHID 已连接");
             }
             else
             {
-                ImGui::TextColored(ImVec4(255, 0, 0, 255), "Teensy 4.1 RawHID not connected");
+                ImGui::TextColored(ImVec4(255, 0, 0, 255), "Teensy 4.1 RawHID 未连接");
             }
 
             static char serial[64] = "";
@@ -705,16 +705,16 @@ static void draw_mouse_page(MouseSettingsPage page)
                 reconnect_ms = config.teensy_hid_reconnect_interval_ms;
             }
 
-            OverlayUI::InputTextRow("Serial", serial, sizeof(serial));
-            OverlayUI::InputTextRow("VID filter", vid, sizeof(vid));
-            OverlayUI::InputTextRow("PID filter", pid, sizeof(pid));
-            OverlayUI::InputIntRow("Usage Page", &usage_page);
-            OverlayUI::InputIntRow("Usage ID", &usage_id);
-            OverlayUI::InputIntRow("Open Index", &open_index);
-            OverlayUI::InputIntRow("Packet Timeout ms", &timeout_ms);
-            OverlayUI::InputIntRow("Reconnect ms", &reconnect_ms);
+            OverlayUI::InputTextRow("序列号", serial, sizeof(serial));
+            OverlayUI::InputTextRow("VID 过滤", vid, sizeof(vid));
+            OverlayUI::InputTextRow("PID 过滤", pid, sizeof(pid));
+            OverlayUI::InputIntRow("用途页", &usage_page);
+            OverlayUI::InputIntRow("用途 ID", &usage_id);
+            OverlayUI::InputIntRow("打开索引", &open_index);
+            OverlayUI::InputIntRow("数据包超时 ms", &timeout_ms);
+            OverlayUI::InputIntRow("重连间隔 ms", &reconnect_ms);
 
-            if (OverlayUI::ButtonRow("Teensy HID", "Save & Reconnect", "teensy_hid_save_reconnect"))
+            if (OverlayUI::ButtonRow("Teensy HID", "保存并重连", "teensy_hid_save_reconnect"))
             {
                 config.teensy_hid_serial = serial;
                 config.teensy_hid_vid_filter = vid;
@@ -735,19 +735,19 @@ static void draw_mouse_page(MouseSettingsPage page)
         {
             if (razerControl && razerControl->isOpen())
             {
-                ImGui::TextColored(ImVec4(0, 255, 0, 255), "Razer rzctl connected");
+                ImGui::TextColored(ImVec4(0, 255, 0, 255), "Razer rzctl 已连接");
             }
             else
             {
-                ImGui::TextColored(ImVec4(255, 0, 0, 255), "Razer rzctl not connected");
+                ImGui::TextColored(ImVec4(255, 0, 0, 255), "Razer rzctl 未连接");
             }
-            ImGui::Text("Requires rzctl.dll next to ai.exe.");
-            ImGui::TextColored(ImVec4(255, 0, 0, 255), "Use at your own risk, the method is detected in some games.");
+            ImGui::Text("需要 rzctl.dll 放在 ai.exe 旁边");
+            ImGui::TextColored(ImVec4(255, 0, 0, 255), "风险自负，此方法在某些游戏中被检测");
         }
         else if (config.input_method == "WIN32")
         {
-            ImGui::TextColored(ImVec4(255, 255, 255, 255), "This is a standard mouse input method, it may not work in most games. Use GHUB, RAZER, ARDUINO, RP2350, TEENSY41, or TEENSY41_HID.");
-            ImGui::TextColored(ImVec4(255, 0, 0, 255), "Use at your own risk, the method is detected in some games.");
+            ImGui::TextColored(ImVec4(255, 255, 255, 255), "标准鼠标输入方式，在大多数游戏中可能不工作。建议使用 GHUB、RAZER、ARDUINO、RP2350、TEENSY41 或 TEENSY41_HID");
+            ImGui::TextColored(ImVec4(255, 0, 0, 255), "风险自负，此方法在某些游戏中被检测");
         }
         else if (config.input_method == "KMBOX_NET")
         {
@@ -775,7 +775,7 @@ static void draw_mouse_page(MouseSettingsPage page)
             OverlayUI::InputTextRow("Port", port, sizeof(port));
             OverlayUI::InputTextRow("UUID", uuid, sizeof(uuid));
 
-            if (OverlayUI::ButtonRow("kmboxNet", "Save & Reconnect", "kmbox_net_save_reconnect"))
+            if (OverlayUI::ButtonRow("kmboxNet", "保存并重连", "kmbox_net_save_reconnect"))
             {
                 config.kmbox_net_ip = ip;
                 config.kmbox_net_port = port;
@@ -799,17 +799,17 @@ static void draw_mouse_page(MouseSettingsPage page)
 
             if (kmboxNetConnected)
             {
-                ImGui::TextColored(ImVec4(0, 255, 0, 255), "kmboxNet connected");
+                ImGui::TextColored(ImVec4(0, 255, 0, 255), "kmboxNet 已连接");
             }
             else
             {
-                ImGui::TextColored(ImVec4(255, 0, 0, 255), "kmboxNet not connected");
+                ImGui::TextColored(ImVec4(255, 0, 0, 255), "kmboxNet 未连接");
             }
 
             if (!kmboxNetConnected)
                 ImGui::BeginDisabled();
 
-            if (OverlayUI::ButtonRow("kmboxNet box", "Reboot box", "kmbox_net_reboot"))
+            if (OverlayUI::ButtonRow("kmboxNet box", "重启设备", "kmbox_net_reboot"))
             {
                 std::lock_guard<std::mutex> lock(inputDevicesMutex);
                 KmboxNetConnection* device =
@@ -820,7 +820,7 @@ static void draw_mouse_page(MouseSettingsPage page)
                     device->reboot();
             }
 
-            if (OverlayUI::ButtonRow("kmboxNet image", "Change image", "kmbox_net_image"))
+            if (OverlayUI::ButtonRow("kmboxNet image", "更换图片", "kmbox_net_image"))
             {
                 std::lock_guard<std::mutex> lock(inputDevicesMutex);
                 KmboxNetConnection* device =
@@ -850,9 +850,9 @@ static void draw_mouse_page(MouseSettingsPage page)
             }
 
             OverlayUI::InputTextRow("PIDVID", pidvid, sizeof(pidvid));
-            ImGui::TextDisabled("Format: PPPPVVVV (one field)");
+            ImGui::TextDisabled("格式：PPPPVVVV（一个字段）");
 
-            if (OverlayUI::ButtonRow("kmboxA", "Save & Reconnect", "kmbox_a_save_reconnect"))
+            if (OverlayUI::ButtonRow("kmboxA", "保存并重连", "kmbox_a_save_reconnect"))
             {
                 config.kmbox_a_pidvid = pidvid;
                 last_pidvid = config.kmbox_a_pidvid;
@@ -862,11 +862,11 @@ static void draw_mouse_page(MouseSettingsPage page)
 
             if (kmboxASerial && kmboxASerial->isOpen())
             {
-                ImGui::TextColored(ImVec4(0, 255, 0, 255), "kmboxA connected");
+                ImGui::TextColored(ImVec4(0, 255, 0, 255), "kmboxA 已连接");
             }
             else
             {
-                ImGui::TextColored(ImVec4(255, 0, 0, 255), "kmboxA not connected");
+                ImGui::TextColored(ImVec4(255, 0, 0, 255), "kmboxA 未连接");
             }
         }
         else if (config.input_method == "MAKCU")
@@ -894,7 +894,7 @@ static void draw_mouse_page(MouseSettingsPage page)
                 }
             }
 
-            if (OverlayUI::ComboRow("Makcu Port", &port_index, port_items.data(), static_cast<int>(port_items.size())))
+            if (OverlayUI::ComboRow("Makcu 端口", &port_index, port_items.data(), static_cast<int>(port_items.size())))
             {
                 config.makcu_port = port_list[port_index];
                 OverlayConfig_MarkDirty();
@@ -922,7 +922,7 @@ static void draw_mouse_page(MouseSettingsPage page)
                 }
             }
 
-            if (OverlayUI::ComboRow("Makcu Baudrate", &baud_index, baud_items.data(), static_cast<int>(baud_items.size())))
+            if (OverlayUI::ComboRow("Makcu 波特率", &baud_index, baud_items.data(), static_cast<int>(baud_items.size())))
             {
                 config.makcu_baudrate = baud_list[baud_index];
                 OverlayConfig_MarkDirty();
@@ -931,11 +931,11 @@ static void draw_mouse_page(MouseSettingsPage page)
 
             if (makcuSerial && makcuSerial->isOpen())
             {
-                ImGui::TextColored(ImVec4(0, 255, 0, 255), "Makcu connected");
+                ImGui::TextColored(ImVec4(0, 255, 0, 255), "Makcu 已连接");
             }
             else
             {
-                ImGui::TextColored(ImVec4(255, 0, 0, 255), "Makcu not connected");
+                ImGui::TextColored(ImVec4(255, 0, 0, 255), "Makcu 未连接");
             }
         }
 

@@ -91,10 +91,10 @@ void draw_capture_settings()
         if (config.detection_resolution == allowed_resolutions[i])
             current_resolution_idx = i;
 
-    if (OverlayUI::BeginSection("General Capture", "capture_section_general"))
+    if (OverlayUI::BeginSection("通用捕获", "capture_section_general"))
     {
         {
-            const auto row = OverlayUI::BeginSettingRow("Detection Resolution");
+            const auto row = OverlayUI::BeginSettingRow("检测分辨率");
             if (ImGui::Combo("##value", &current_resolution_idx, "160\0""320\0""640\0"))
             {
                 config.detection_resolution = allowed_resolutions[current_resolution_idx];
@@ -116,7 +116,7 @@ void draw_capture_settings()
         }
 
         {
-            const auto row = OverlayUI::BeginSettingRow("Capture FPS");
+            const auto row = OverlayUI::BeginSettingRow("捕获帧率");
             if (ImGui::SliderInt("##value", &config.capture_fps, 0, 360))
             {
                 capture_fps_changed.store(true);
@@ -127,15 +127,15 @@ void draw_capture_settings()
 
         if (config.capture_fps == 0)
         {
-            OverlayUI::TextRow("Capture FPS cap is disabled.", IM_COL32(255, 188, 108, 255));
+            OverlayUI::TextRow("捕获帧率限制已禁用", IM_COL32(255, 188, 108, 255));
         }
         else if (config.capture_fps >= 61)
         {
-            OverlayUI::TextRow("WARNING: High FPS can reduce performance.");
+            OverlayUI::TextRow("警告：高帧率可能降低性能");
         }
 
         {
-            const auto row = OverlayUI::BeginSettingRow("Circle FOV");
+            const auto row = OverlayUI::BeginSettingRow("圆形视野");
             if (ImGui::Checkbox("##value", &config.circle_fov_enabled))
             {
                 OverlayConfig_MarkDirty();
@@ -145,7 +145,7 @@ void draw_capture_settings()
 
         if (config.circle_fov_enabled)
         {
-            const auto row = OverlayUI::BeginSettingRow("Circle FOV size");
+            const auto row = OverlayUI::BeginSettingRow("圆形视野大小");
             if (ImGui::SliderInt("##value", &config.circle_fov_radius_percent, 1, 100, "%d%%"))
             {
                 OverlayConfig_MarkDirty();
@@ -163,7 +163,7 @@ void draw_capture_settings()
             }
 
             {
-                const auto row = OverlayUI::BeginSettingRow("Use CUDA Direct Capture");
+                const auto row = OverlayUI::BeginSettingRow("使用 CUDA 直接捕获");
                 if (ImGui::Checkbox("##value", &config.capture_use_cuda))
                 {
                     OverlayConfig_MarkDirty();
@@ -174,7 +174,7 @@ void draw_capture_settings()
             if (!cudaCaptureAvailable)
             {
                 ImGui::EndDisabled();
-                OverlayUI::TextRow("Available only with duplication_api.", IM_COL32(188, 188, 188, 255));
+                OverlayUI::TextRow("仅在使用 duplication_api 时可用", IM_COL32(188, 188, 188, 255));
             }
         }
 #endif
@@ -198,7 +198,7 @@ void draw_capture_settings()
         }
 
         {
-            const auto row = OverlayUI::BeginSettingRow("Capture method");
+            const auto row = OverlayUI::BeginSettingRow("捕获方式");
             if (ImGui::Combo("##value", &currentcaptureMethodIndex, captureMethodItems.data(), static_cast<int>(captureMethodItems.size())))
             {
                 config.capture_method = captureMethodOptions[currentcaptureMethodIndex];
@@ -221,7 +221,7 @@ void draw_capture_settings()
                 std::vector<std::string> targetOptions = { "monitor", "window" };
                 int currentTargetIndex = (config.capture_target == "window") ? 1 : 0;
                 {
-                    const auto row = OverlayUI::BeginSettingRow("Capture target (WinRT)");
+                    const auto row = OverlayUI::BeginSettingRow("捕获目标 (WinRT)");
                     if (ImGui::Combo("##value", &currentTargetIndex,
                         [](void* data, int idx) -> const char* {
                             const auto* v = static_cast<const std::vector<std::string>*>(data);
@@ -243,7 +243,7 @@ void draw_capture_settings()
                     refreshCaptureWindowList();
 
                 {
-                    const auto row = OverlayUI::BeginSettingRow("Window filter");
+                    const auto row = OverlayUI::BeginSettingRow("窗口过滤");
                     ImGui::InputText("##value", capture_window_filter_buf, IM_ARRAYSIZE(capture_window_filter_buf));
                     OverlayUI::EndSettingRow(row);
                 }
@@ -261,7 +261,7 @@ void draw_capture_settings()
                 if (!filteredWindowIndices.empty())
                 {
                     const std::string preview = config.capture_window_title.empty()
-                        ? std::string("Select window")
+                        ? std::string("选择窗口")
                         : config.capture_window_title;
 
                     const auto row = OverlayUI::BeginSettingRow("Window");
@@ -287,12 +287,12 @@ void draw_capture_settings()
                 }
                 else
                 {
-                    OverlayUI::TextRow("No matching windows", IM_COL32(188, 188, 188, 255));
+                    OverlayUI::TextRow("无匹配窗口", IM_COL32(188, 188, 188, 255));
                 }
 
                 {
-                    const auto row = OverlayUI::BeginSettingRow("Window list");
-                    if (ImGui::Button("Refresh", ImVec2(row.controlWidth, 0.0f)))
+                    const auto row = OverlayUI::BeginSettingRow("窗口列表");
+                    if (ImGui::Button("刷新", ImVec2(row.controlWidth, 0.0f)))
                     {
                         refreshCaptureWindowList();
                         if (currentWindowTitleIsInList())
@@ -308,7 +308,7 @@ void draw_capture_settings()
             }
 
             {
-                const auto row = OverlayUI::BeginSettingRow("Capture Borders");
+                const auto row = OverlayUI::BeginSettingRow("捕获边框");
                 if (ImGui::Checkbox("##value", &config.capture_borders))
                 {
                     capture_borders_changed.store(true);
@@ -318,7 +318,7 @@ void draw_capture_settings()
             }
 
             {
-                const auto row = OverlayUI::BeginSettingRow("Capture Cursor");
+                const auto row = OverlayUI::BeginSettingRow("捕获光标");
                 if (ImGui::Checkbox("##value", &config.capture_cursor))
                 {
                     capture_cursor_changed.store(true);
@@ -338,13 +338,13 @@ void draw_capture_settings()
 
     if (config.capture_method == "duplication_api" || (config.capture_method == "winrt" && config.capture_target != "window"))
     {
-        if (OverlayUI::BeginSection("Monitor Capture", "capture_section_monitor"))
+        if (OverlayUI::BeginSection("显示器捕获", "capture_section_monitor"))
         {
             std::vector<std::string> monitorNames;
             int monitorCount = monitors;
             if (monitorCount <= 0)
             {
-                monitorNames.push_back("Monitor 1");
+                monitorNames.push_back("显示器 1");
                 monitorCount = 1;
             }
             else
@@ -363,7 +363,7 @@ void draw_capture_settings()
 
             int selectedMonitor = std::clamp(config.monitor_idx, 0, monitorCount - 1);
             {
-                const auto row = OverlayUI::BeginSettingRow("Capture monitor");
+                const auto row = OverlayUI::BeginSettingRow("捕获显示器");
                 if (ImGui::Combo("##value", &selectedMonitor, monitorItems.data(), static_cast<int>(monitorItems.size())))
                 {
                     config.monitor_idx = selectedMonitor;
@@ -379,12 +379,12 @@ void draw_capture_settings()
 
     if (config.capture_method == "virtual_camera")
     {
-        if (OverlayUI::BeginSection("Virtual Camera", "capture_section_virtual_camera"))
+        if (OverlayUI::BeginSection("虚拟摄像头", "capture_section_virtual_camera"))
         {
             ensureVirtualCamerasLoaded();
 
             {
-                const auto row = OverlayUI::BeginSettingRow("Filter");
+                const auto row = OverlayUI::BeginSettingRow("过滤");
                 ImGui::InputText("##value", virtual_camera_filter_buf, IM_ARRAYSIZE(virtual_camera_filter_buf));
                 OverlayUI::EndSettingRow(row);
             }
@@ -421,7 +421,7 @@ void draw_capture_settings()
                 }
 
                 {
-                    const auto row = OverlayUI::BeginSettingRow("Virtual camera");
+                    const auto row = OverlayUI::BeginSettingRow("虚拟摄像头");
                     if (ImGui::Combo("##value", &currentIndex, items.data(), static_cast<int>(items.size())))
                     {
                         config.virtual_camera_name = virtual_cameras[filtered_indices[currentIndex]];
@@ -433,12 +433,12 @@ void draw_capture_settings()
             }
             else
             {
-                OverlayUI::TextRow("No matching virtual cameras", IM_COL32(188, 188, 188, 255));
+                OverlayUI::TextRow("无匹配虚拟摄像头", IM_COL32(188, 188, 188, 255));
             }
 
             {
-                const auto row = OverlayUI::BeginSettingRow("Camera list");
-                if (ImGui::Button("Refresh", ImVec2(row.controlWidth, 0.0f)))
+                const auto row = OverlayUI::BeginSettingRow("摄像头列表");
+                if (ImGui::Button("刷新", ImVec2(row.controlWidth, 0.0f)))
                 {
                     VirtualCameraCapture::ClearCachedCameraList();
                     virtual_cameras = VirtualCameraCapture::GetAvailableVirtualCameras(true);
@@ -448,7 +448,7 @@ void draw_capture_settings()
             }
 
             {
-                const auto row = OverlayUI::BeginSettingRow("Virtual camera width");
+                const auto row = OverlayUI::BeginSettingRow("虚拟摄像头宽度");
                 if (ImGui::SliderInt("##value", &config.virtual_camera_width, 128, 3840))
                 {
                     OverlayConfig_MarkDirty();
@@ -458,7 +458,7 @@ void draw_capture_settings()
             }
 
             {
-                const auto row = OverlayUI::BeginSettingRow("Virtual camera height");
+                const auto row = OverlayUI::BeginSettingRow("虚拟摄像头高度");
                 if (ImGui::SliderInt("##value", &config.virtual_camera_heigth, 128, 2160))
                 {
                     OverlayConfig_MarkDirty();
@@ -473,7 +473,7 @@ void draw_capture_settings()
 
     if (config.capture_method == "udp_capture")
     {
-        if (OverlayUI::BeginSection("UDP Capture", "capture_section_udp"))
+        if (OverlayUI::BeginSection("UDP 捕获", "capture_section_udp"))
         {
             if (!udp_settings_init)
             {
@@ -492,13 +492,13 @@ void draw_capture_settings()
                 OverlayUI::EndSettingRow(row);
             }
             {
-                const auto row = OverlayUI::BeginSettingRow("UDP Port");
+                const auto row = OverlayUI::BeginSettingRow("UDP 端口");
                 ImGui::InputInt("##value", &udp_port_buf);
                 OverlayUI::EndSettingRow(row);
             }
             {
-                const auto row = OverlayUI::BeginSettingRow("UDP settings");
-                if (ImGui::Button("Apply UDP Settings", ImVec2(row.controlWidth, 0.0f)))
+                const auto row = OverlayUI::BeginSettingRow("UDP 设置");
+                if (ImGui::Button("应用 UDP 设置", ImVec2(row.controlWidth, 0.0f)))
                 {
                     udp_port_buf = std::clamp(udp_port_buf, 1, 65535);
                     config.udp_ip = udp_ip_buf;
