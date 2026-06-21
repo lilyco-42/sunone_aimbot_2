@@ -55,6 +55,59 @@ rp2350_16_bit_mouse = true
 
 固件在 [ai_aimbot_train/rp2040_aim](https://github.com/lilyco-42/ai_aimbot_train/tree/main/rp2040_aim)。
 
+## 🤖 模型训练
+
+训练仓库: [ai_aimbot_train](https://github.com/lilyco-42/ai_aimbot_train)
+
+- 2573 张已标注 FPS 游戏截图（player + head 类别）
+- Kaggle 免费 GPU 训练 Notebook
+- 三角洲行动专用数据集提取脚本 (HuggingFace)
+
+```bash
+git clone https://github.com/lilyco-42/ai_aimbot_train.git
+cd ai_aimbot_train
+# 免费 GPU: Kaggle Notebook kaggle_train.ipynb
+# 付费 GPU: yolo detect train data=game.yaml model=yolo11n.pt epochs=100 imgsz=640 batch=64 device=0
+```
+
+## 🔧 CI/CD
+
+### GitHub Actions 自动构建
+
+| Workflow | 触发条件 | 产物 |
+|----------|---------|------|
+| **Build DML** | Push to main | `sunone_aimbot_dml_x64.zip` |
+| **Build CUDA** | 手动触发 | `sunone_aimbot_cuda_x64.zip` |
+
+**DML 构建** 每次 push 在 GitHub windows-2025 runner 上全自动完成：
+1. 安装 MSVC + CMake + Ninja
+2. 下载 OpenCV 4.13.0 预编译包
+3. 恢复 NuGet 依赖 (ONNX Runtime + DirectML)
+4. 拉取 SimpleIni + serial 源码模块
+5. 编译 + 打包 ZIP artifact
+
+**CUDA 构建** 需要 [self-hosted runner](https://github.com/lilyco-42/sunone_aimbot_2/settings/actions/runners/new)（有 NVIDIA GPU + CUDA 13.1 + TensorRT 的 Windows 机器）。
+
+### 本地构建
+
+```powershell
+# DML (所有 GPU)
+.\build_dml.bat -NonInteractive -OpenCvAlreadyBuilt $true -DownloadOrUpdateNeeded $false
+
+# CUDA (NVIDIA only, 需 CUDA 13.1 + TensorRT)
+.\build_cuda.bat -NonInteractive -OpenCvAlreadyBuilt $false -DownloadOrUpdateNeeded $true -CudaArchBin 8.6
+
+# 快速重编
+.\build_no-options.bat -Backend DML
+```
+
+## 📚 文档
+
+- [构建过程记录](BUILD_PROCESS.md) — NOMINMAX、/utf-8、x64 修复
+- [中文字体修复](docs/guides/chinese-font-fix.md) — SimHei 字体选择与 ImGui 字形范围
+- [三角洲专用配置](config_deltaforce.ini) — RP2350 硬件鼠标调优
+- [原项目构建指南](docs/build.md)
+
 ---
 
 # 原项目说明
