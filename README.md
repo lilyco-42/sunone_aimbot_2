@@ -1,18 +1,63 @@
 <div align="center">
 
-# Sunone Aimbot 2 (C++)
+# Sunone Aimbot 2 (C++) — 中文汉化版
 
-[![C++](https://img.shields.io/badge/C%2B%2B-17-blue)](https://github.com/SunOner/sunone_aimbot_2)
-[![GitHub stars](https://img.shields.io/github/stars/SunOner/sunone_aimbot_2?color=ffb500)](https://github.com/SunOner/sunone_aimbot_2)
-[![CUDA 13.1](https://img.shields.io/badge/CUDA-13.1-76B900?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-downloads)
-[![Discord server](https://badgen.net/discord/online-members/37WVp6sNEh)](https://discord.gg/37WVp6sNEh)
+> 🀄️ 完整中文界面 | 🖱️ RP2040 硬件鼠标 | 🔫 三角洲行动优化
 
-  <p>
-    <a href="https://github.com/SunOner/sunone_aimbot_2/releases" target="_blank">
-      <img width="75%" src="https://github.com/SunOner/sunone_aimbot/blob/main/media/one.gif">
-    </a>
-  </p>
+[![C++](https://img.shields.io/badge/C%2B%2B-17-blue)](https://github.com/lilyco-42/sunone_aimbot_2)
+[![DirectML](https://img.shields.io/badge/DirectML-Universal_GPU-green)](https://github.com/lilyco-42/sunone_aimbot_2)
+[![Chinese](https://img.shields.io/badge/UI-中文-red)](https://github.com/lilyco-42/sunone_aimbot_2)
+[![RP2040](https://img.shields.io/badge/Hardware-RP2040_Mouse-orange)](https://github.com/lilyco-42/ai_aimbot_train)
+
+> 原项目: [SunOner/sunone_aimbot_2](https://github.com/SunOner/sunone_aimbot_2) · 训练仓库: [ai_aimbot_train](https://github.com/lilyco-42/ai_aimbot_train)
+
 </div>
+
+## 🚀 本 Fork 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| 🀄️ **完整中文界面** | 覆盖层 365+ 字符串汉化，SimHei 中文字体支持 |
+| 🖱️ **RP2040 硬件鼠标** | Pico 固件模拟 HID 鼠标，绕过反作弊拦截 |
+| 🔫 **三角洲行动优化** | 调优配置 + 专用 AI 模型训练管道 |
+| 🛠️ **编译修复** | NOMINMAX、/utf-8、x64 MSVC 修复 |
+| 📦 **RP2040 固件** | PlatformIO 工程，串口转 USB HID |
+| 📓 **Kaggle 免费训练** | Notebook + 数据集打包，CPU 免费训 YOLO |
+
+## 📋 快速开始
+
+### 1. 下载预编译版本
+
+从 [Releases](../../releases) 下载 `sunone_aimbot_dml_x64.zip`，解压直接运行。
+
+### 2. 放置模型
+
+将 `.onnx` 模型放入 `models/` 目录，覆盖层中 `HOME` 键选择。
+
+### 3. 管理员运行
+
+```powershell
+Start-Process ai.exe -Verb RunAs
+```
+
+首次启动自动生成 `config.ini`。
+
+### 硬件鼠标（可选）
+
+烧录 RP2040 Pico 固件后改用硬件 HID：
+
+```ini
+input_method = RP2350
+rp2350_port = COM9
+rp2350_baudrate = 115200
+rp2350_16_bit_mouse = true
+```
+
+固件在 [ai_aimbot_train/rp2040_aim](https://github.com/lilyco-42/ai_aimbot_train/tree/main/rp2040_aim)。
+
+---
+
+# 原项目说明
 
 ---
 
