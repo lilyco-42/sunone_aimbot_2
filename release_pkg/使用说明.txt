@@ -1,0 +1,32 @@
+============================
+  AI Aimbot v1.0 — DirectML
+============================
+
+系统要求:
+  Windows 10/11 x64
+  任意 GPU (NVIDIA/AMD/Intel)
+
+使用步骤:
+  1. 解压到任意目录
+  2. 右键 ai.exe → 以管理员身份运行
+  3. 按 HOME 打开设置覆盖层
+  4. 选择模型: models/model.onnx
+  5. 按右键瞄准, F2 退出
+
+硬件鼠标 (可选):
+  需要 RP2040 Pico 烧录固件
+  配置 config.ini:
+    input_method = RP2350
+    rp2350_port = 你的COM口
+    rp2350_baudrate = 115200
+    rp2350_16_bit_mouse = true
+
+模型说明:
+  models/model.onnx — 通用FPS检测模型 (3类: player/head/body)
+  输入 320x320, DirectML GPU 推理
+
+文件:
+  ai.exe          — 主程序 (UPX压缩)
+  config.ini      — 配置文件 (可自行调参)
+  models/         — 模型目录
+  *.dll           — 运行时库
