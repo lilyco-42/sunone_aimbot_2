@@ -1,0 +1,90 @@
+name: Build DML (DirectML)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Setup CMake & Ninja
+        run: |
+          choco install ninja -y
+          cmake --version
+          ninja --version
+
+      - name: Setup OpenCV DML
+        run: |
+          $opencvDir = "${{ github.workspace }}\sunone_aimbot_2\modules\opencv\build\dml"
+          New-Item -ItemType Directory -Force -Path $opencvDir | Out-Null
+          # Download pre-built OpenCV for Windows (MSVC 2022 x64)
+          $url = "https://github.com/opencv/opencv/releases/download/4.13.0/opencv-4.13.0-windows-x64-vc17.zip"
+          $zip = "$env:TEMP\opencv.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath "$env:TEMP\opencv"
+          $src = Get-ChildItem "$env:TEMP\opencv\opencv*" | Select-Object -First 1
+          Copy-Item -Recurse "$($src.FullName)\*" $opencvDir
+
+      - name: Setup NuGet packages
+        run: |
+          nuget restore ${{ github.workspace }}\sunone_aimbot_2\packages.config `
+            -PackagesDirectory ${{ github.workspace }}\packages `
+            -Source https://api.nuget.org/v3/index.json `
+            -NonInteractive
+
+      - name: Setup SimpleIni & serial
+        run: |
+          $modules = "${{ github.workspace }}\sunone_aimbot_2\modules"
+          if (-not (Test-Path "$modules\SimpleIni.h")) {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/brofield/simpleini/main/SimpleIni.h" `
+              -OutFile "$modules\SimpleIni.h"
+          }
+          if (-not (Test-Path "$modules\serial")) {
+            git clone --depth 1 https://github.com/wjwwood/serial.git "$modules\serial"
+          }
+
+      - name: Configure CMake
+        run: |
+          cmake -S ${{ github.workspace }} `
+            -B ${{ github.workspace }}\build\dml `
+            -G "Ninja Multi-Config" `
+            -DCMAKE_MAKE_PROGRAM=ninja `
+            -DAIMBOT_USE_CUDA=OFF `
+            -DAIMBOT_COPY_RUNTIME_DLLS=ON `
+            -DAIMBOT_OPENCV_DML_ROOT=${{ github.workspace }}\sunone_aimbot_2\modules\opencv\build\dml `
+            -DAIMBOT_ONNXRUNTIME_DIR=${{ github.workspace }}\packages\Microsoft.ML.OnnxRuntime.DirectML.1.22.0 `
+            -DAIMBOT_DIRECTML_DIR=${{ github.workspace }}\packages\Microsoft.AI.DirectML.1.15.4
+
+      - name: Build
+        run: cmake --build ${{ github.workspace }}\build\dml --config Release --target ai --parallel
+
+      - name: Package
+        run: |
+          $out = "${{ github.workspace }}\build\dml\Release"
+          $pkg = "${{ github.workspace }}\sunone_aimbot_dml_x64"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item "$out\ai.exe" $pkg
+          Copy-Item "$out\*.dll" $pkg
+          Copy-Item "$out\config.ini" $pkg -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path "$pkg\models" | Out-Null
+          New-Item -ItemType Directory -Path "$pkg\depth_models" | Out-Null
+          Compress-Archive -Path $pkg -DestinationPath "$out\sunone_aimbot_dml_x64.zip"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunone_aimbot_dml_x64
+          path: build/dml/Release/sunone_aimbot_dml_x64.zip

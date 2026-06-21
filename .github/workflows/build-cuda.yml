@@ -1,0 +1,71 @@
+name: Build CUDA (TensorRT)
+
+# CUDA build requires:
+# 1. Self-hosted Windows runner with NVIDIA GPU + CUDA 13.1 + TensorRT
+# 2. Or setup TENSORRT_URL secret pointing to NVIDIA SDK download
+# 3. TensorRT SDK extracted to: sunone_aimbot_2/modules/TensorRT-10.x/
+
+on:
+  workflow_dispatch:
+    inputs:
+      cuda_arch:
+        description: 'CUDA Architecture (e.g. 8.6 for RTX 3060)'
+        required: false
+        default: '8.6'
+
+jobs:
+  build:
+    runs-on: [self-hosted, windows, cuda]
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      - name: Verify CUDA
+        run: |
+          nvcc --version
+          if ($LASTEXITCODE -ne 0) { throw "CUDA not found. Install CUDA Toolkit 13.1+" }
+
+      - name: Verify TensorRT
+        run: |
+          $trt = Get-ChildItem "${{ github.workspace }}\sunone_aimbot_2\modules\TensorRT-*" -Directory | Select-Object -First 1
+          if (-not $trt) {
+            throw "TensorRT not found. Download Windows SDK from NVIDIA and extract to modules/"
+          }
+          Write-Host "TensorRT found: $trt"
+          Test-Path "$trt\include\NvInfer.h" | Should-Be-True
+
+      - name: Setup Ninja
+        run: choco install ninja -y
+
+      - name: Build (wrapper script)
+        run: |
+          $arch = "${{ inputs.cuda_arch }}"
+          $args = @("-NonInteractive", "-OpenCvAlreadyBuilt", '$false',
+                     "-DownloadOrUpdateNeeded", '$true', "-CudaArchBin", $arch)
+          & ".\build_cuda.bat" @args
+
+      - name: Package
+        run: |
+          $out = "${{ github.workspace }}\build\cuda\Release"
+          $pkg = "${{ github.workspace }}\sunone_aimbot_cuda_x64"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item "$out\ai.exe" $pkg
+          Copy-Item "$out\*.dll" $pkg
+          Copy-Item "$out\config.ini" $pkg -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path "$pkg\models" | Out-Null
+          New-Item -ItemType Directory -Path "$pkg\depth_models" | Out-Null
+          Compress-Archive -Path $pkg -DestinationPath "$out\sunone_aimbot_cuda_x64.zip"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sunone_aimbot_cuda_x64
+          path: build/cuda/Release/sunone_aimbot_cuda_x64.zip
